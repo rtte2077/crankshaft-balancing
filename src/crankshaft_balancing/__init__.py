@@ -11,6 +11,9 @@ from .loader import (load_constraints, load_counterweight_positions,
 from .optimization import (CounterweightLP, build_counterweight_lp,
                            make_initial_coefficients, optimize_counterweights,
                            optimize_counterweights_history)
+from .report import (CounterweightRow, counterweight_rows,
+                     format_counterweight_table, rows_from_components,
+                     save_counterweight_csv)
 from .sections import (NMM_TO_NM, heaviside_ramp, section_contribution,
                        section_grid, total_distribution)
 from .verification import (sweep_sensitivity, verify_kkt_conditions,
@@ -28,6 +31,8 @@ __all__ = [
     "distance_from_right_end", "radial_distance",
     "CounterweightLP", "build_counterweight_lp", "make_initial_coefficients",
     "optimize_counterweights", "optimize_counterweights_history",
+    "CounterweightRow", "counterweight_rows", "format_counterweight_table",
+    "rows_from_components", "save_counterweight_csv",
     "NMM_TO_NM", "heaviside_ramp", "section_contribution", "section_grid",
     "total_distribution",
     "sweep_sensitivity", "verify_kkt_conditions", "verify_optimum_via_duality",

@@ -9,6 +9,8 @@ from .analysis import analyze, raw_moments
 from .constraints import resolve_constraints
 from .loader import load_constraints, load_counterweight_positions, load_shaft
 from .optimization import optimize_counterweights_history
+from .report import (counterweight_rows, format_counterweight_table,
+                     save_counterweight_csv)
 from .sections import NMM_TO_NM, section_grid
 from .verification import (sweep_sensitivity, verify_kkt_conditions,
                            verify_optimum_via_duality)
@@ -22,6 +24,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default="output", help="папка для графиков (по умолчанию: output)")
     p.add_argument("--step", type=float, default=0.01,
                    help="шаг сетки сечений, мм (по умолчанию 0.01)")
+    p.add_argument("--csv", metavar="ФАЙЛ",
+                   help="сохранить таблицу статических моментов противовесов в CSV "
+                        "(без этого ключа CSV кладётся в папку --out вместе с графиками)")
     p.add_argument("--no-plots", action="store_true", help="только расчёт, без графиков")
     p.add_argument("--verify", action="store_true",
                    help="проверить глобальность оптимума (двойственность + ККТ)")
@@ -71,6 +76,12 @@ def main(argv=None) -> int:
 
     print(f"\nmax|Mx| = {res.max_moment_x:.4f} Н·м, max|My| = {res.max_moment_y:.4f} Н·м")
 
+    rows = counterweight_rows(res)
+    print("\n" + format_counterweight_table(rows))
+    if args.csv:
+        save_counterweight_csv(rows, args.csv)
+        print(f"Таблица сохранена: {args.csv}")
+
     if args.verify:
         print()
         for axis, r in (("y", res.result_y), ("x", res.result_x)):
@@ -90,6 +101,8 @@ def main(argv=None) -> int:
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    if not args.csv:
+        save_counterweight_csv(rows, out / "counterweights.csv")
     f, Z, L = res.forces, res.Z, res.engine.crankshaft_length
 
     for axis, Fc, Fp, r in (("x", f.Fx_cheeks, f.Fx_crankpins, res.result_x),
@@ -127,6 +140,8 @@ def main(argv=None) -> int:
     if args.convergence:
         _convergence_plots(res, constraints, out)
 
+    import matplotlib.pyplot as plt
+    plt.close("all")   # фигуры уже сохранены в файлы — освобождаем память
     print(f"Графики сохранены в {out.resolve()}")
     return 0
 
