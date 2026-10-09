@@ -1,15 +1,16 @@
 """Сквозной расчёт: геометрия -> силы -> оптимизация противовесов по осям X и Y."""
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Mapping, Optional, Sequence
 
 import numpy as np
 
 from .config import EngineConfig
+from .constraints import CounterweightConstraints, resolve_constraints
 from .forces import (centrifugal_force_magnitude, centrifugal_force_vectors,
                      distance_from_right_end, radial_distance)
 from .geometry import (CrankshaftGeometry, ShaftComponent, build_geometry,
                        derive_crankshaft_dimensions)
-from .optimization import make_initial_coefficients, optimize_counterweights
+from .optimization import optimize_counterweights
 from .sections import NMM_TO_NM, section_grid, total_distribution
 
 
@@ -38,6 +39,7 @@ class BalanceResult:
     module_width: float
     result_x: dict
     result_y: dict
+    L_counterweights: np.ndarray   # точки приложения F3 (L от правого конца)
 
     @property
     def max_moment_x(self) -> float:
@@ -84,30 +86,58 @@ def raw_moments(Z: np.ndarray, f: ShaftForces) -> tuple:
 
 
 def analyze(engine: EngineConfig, components: Sequence[ShaftComponent],
-            step: float = 0.01, verbose: bool = True) -> BalanceResult:
+            step: float = 0.01, verbose: bool = True,
+            constraints: Optional[Mapping[str, CounterweightConstraints]] = None,
+            counterweight_positions: Optional[Sequence[float]] = None
+            ) -> BalanceResult:
     """Полный расчёт балансировки для заданных параметров и элементов вала.
 
     ``engine.crankshaft_length`` заполняется автоматически из геометрии.
     ``step`` — шаг сетки сечений, мм.
+    ``constraints`` — ограничения на противовесы: словарь с ключами ``"x"``, ``"y"``
+    и/или ``"all"`` (обе оси), значения — ``CounterweightConstraints``.
+    Номер противовеса = номер щеки вдоль вала по возрастанию x, с 0.
+    ``counterweight_positions`` — координаты x (мм, как у элементов вала), где стоят
+    противовесы; по умолчанию противовесы стоят на щёках. Если заданы, номер
+    противовеса — номер позиции в этом списке (после сортировки по возрастанию).
     """
     geometry = build_geometry(components)
     engine.crankshaft_length, module_width = derive_crankshaft_dimensions(geometry, engine)
     if verbose:
         print(f"Длина коленвала (из геометрии): {engine.crankshaft_length:.3f} мм")
         print(f"Шаг колена (из геометрии):      {module_width:.3f} мм")
+        cheeks = ", ".join(f"{i}: x={x:.3f}"
+                           for i, x in enumerate(geometry.cheek_centers[:, 0]))
+        print(f"Щёки (номер противовеса: координата, мм): {cheeks}")
 
     Z = section_grid(engine.crankshaft_length, step=step)
     f = compute_forces(geometry, engine)
 
-    result_y = optimize_counterweights(
-        Z, f.L_cheeks, f.Fy_cheeks, f.L_crankpins, f.Fy_crankpins,
-        engine.angular_speed, make_initial_coefficients(len(f.Fy_cheeks)),
-        axis="y", verbose=verbose)
-    result_x = optimize_counterweights(
-        Z, f.L_cheeks, f.Fx_cheeks, f.L_crankpins, f.Fx_crankpins,
-        engine.angular_speed, make_initial_coefficients(len(f.Fx_cheeks)),
-        axis="x", verbose=verbose)
+    if counterweight_positions is None:
+        L3 = f.L_cheeks
+    else:
+        xs = np.sort(np.asarray(counterweight_positions, dtype=float))
+        if xs.size == 0:
+            raise ValueError("counterweight_positions не должен быть пустым")
+        if xs.min() < 0 or xs.max() > engine.crankshaft_length:
+            raise ValueError("Позиции противовесов должны лежать в пределах вала "
+                             f"(0..{engine.crankshaft_length:.3f} мм)")
+        L3 = engine.crankshaft_length - xs
+        if verbose:
+            print("Позиции противовесов (номер: x, мм): "
+                  + ", ".join(f"{i}: x={x:.3f}" for i, x in enumerate(xs)))
+    n = len(L3)
+
+    results = {}
+    for axis, Fc, Fp in (("y", f.Fy_cheeks, f.Fy_crankpins),
+                         ("x", f.Fx_cheeks, f.Fx_crankpins)):
+        s_init, s_fixed, s_bounds = resolve_constraints(constraints, axis).to_solver_args(n)
+        results[axis] = optimize_counterweights(
+            Z, f.L_cheeks, Fc, f.L_crankpins, Fp, engine.angular_speed,
+            s_init, s_fixed=s_fixed, L3=L3, s_bounds=s_bounds, axis=axis,
+            verbose=verbose)
 
     return BalanceResult(engine=engine, geometry=geometry, Z=Z, forces=f,
                          module_width=module_width,
-                         result_x=result_x, result_y=result_y)
+                         result_x=results["x"], result_y=results["y"],
+                         L_counterweights=np.asarray(L3, dtype=float))

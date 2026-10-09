@@ -159,7 +159,13 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
 
     if lp.n_free == 0:
         if verbose:
-            print("Все параметры зафиксированы — оптимизация не требуется.")
+            s_all = lp.s_const_vals
+            print(f"[{axis}] все коэффициенты зафиксированы — оптимизация не запускается")
+            print(f"[{axis}] max|M| = {np.max(np.abs(lp.M_fixed)) * NMM_TO_NM:.4f} Н·м")
+            print(f"[{axis}] баланс сил = "
+                  f"{round(np.sum(F1) + np.sum(F2) + np.sum(s_all) * omega ** 2, 6)} Н")
+            print(f"[{axis}] момент на конце M(z[-1]) = "
+                  f"{round(lp.M_fixed[-1] * NMM_TO_NM, 6)} Н·м")
         return {"s": lp.s_const_vals, "F3": lp.s_const_vals * omega ** 2,
                 "M": lp.M_fixed, "success": True, "result": None, "lp": lp}
 
