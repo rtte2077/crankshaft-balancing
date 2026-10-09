@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crankshaft-balancing"
+version = "0.1.0"
+description = "Расчёт моментов от центробежных сил и подбор противовесов коленчатого вала (метод сечений + линейное программирование)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.22",
+    "scipy>=1.9",
+    "matplotlib>=3.5",
+]
+
+[project.optional-dependencies]
+interactive = ["plotly>=5.0"]
+dev = ["pytest>=7", "plotly>=5.0"]
+
+[project.scripts]
+crankbalance = "crankshaft_balancing.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

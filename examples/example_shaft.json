@@ -1,0 +1,23 @@
+{
+  "engine": {
+    "angular_speed": 240.9,
+    "rod_rotating_mass": 1.86,
+    "main_journal_width": 37.0,
+    "crankpin_journal_width": 38.0,
+    "cheek_width": 28.0
+  },
+  "components": [
+    {"kind": "cheek",    "x": 31.469,  "y": 0, "z":  26.5926, "mass": 1.8496},
+    {"kind": "crankpin", "x": 65.5,    "y": 0, "z":  64.0,    "mass": 1.3565},
+    {"kind": "cheek",    "x": 99.531,  "y": 0, "z":  26.5926, "mass": 1.8496},
+    {"kind": "cheek",    "x": 162.469, "y": 0, "z": -26.5926, "mass": 1.8496},
+    {"kind": "crankpin", "x": 196.5,   "y": 0, "z": -64.0,    "mass": 1.3565},
+    {"kind": "cheek",    "x": 230.531, "y": 0, "z": -26.5926, "mass": 1.8496},
+    {"kind": "cheek",    "x": 293.469, "y": 0, "z": -26.5926, "mass": 1.8496},
+    {"kind": "crankpin", "x": 327.5,   "y": 0, "z": -64.0,    "mass": 1.3565},
+    {"kind": "cheek",    "x": 361.531, "y": 0, "z": -26.5926, "mass": 1.8496},
+    {"kind": "cheek",    "x": 424.469, "y": 0, "z":  26.5926, "mass": 1.8496},
+    {"kind": "crankpin", "x": 458.5,   "y": 0, "z":  64.0,    "mass": 1.3565},
+    {"kind": "cheek",    "x": 492.531, "y": 0, "z":  26.5926, "mass": 1.8496}
+  ]
+}

@@ -1,0 +1,30 @@
+"""crankshaft-balancing: моменты от центробежных сил и подбор противовесов коленвала."""
+from .analysis import BalanceResult, ShaftForces, analyze, compute_forces, raw_moments
+from .config import EngineConfig
+from .forces import (centrifugal_force_magnitude, centrifugal_force_vectors,
+                     distance_from_right_end, radial_distance)
+from .geometry import (CrankshaftGeometry, ShaftComponent, build_geometry,
+                       derive_crankshaft_dimensions)
+from .loader import load_shaft
+from .optimization import (CounterweightLP, build_counterweight_lp,
+                           make_initial_coefficients, optimize_counterweights,
+                           optimize_counterweights_history)
+from .sections import (NMM_TO_NM, heaviside_ramp, section_contribution,
+                       section_grid, total_distribution)
+from .verification import (sweep_sensitivity, verify_kkt_conditions,
+                           verify_optimum_via_duality)
+
+__version__ = "0.1.0"
+
+__all__ = [
+    "BalanceResult", "ShaftForces", "analyze", "compute_forces", "raw_moments",
+    "EngineConfig", "CrankshaftGeometry", "ShaftComponent", "build_geometry",
+    "derive_crankshaft_dimensions", "load_shaft",
+    "centrifugal_force_magnitude", "centrifugal_force_vectors",
+    "distance_from_right_end", "radial_distance",
+    "CounterweightLP", "build_counterweight_lp", "make_initial_coefficients",
+    "optimize_counterweights", "optimize_counterweights_history",
+    "NMM_TO_NM", "heaviside_ramp", "section_contribution", "section_grid",
+    "total_distribution",
+    "sweep_sensitivity", "verify_kkt_conditions", "verify_optimum_via_duality",
+]
