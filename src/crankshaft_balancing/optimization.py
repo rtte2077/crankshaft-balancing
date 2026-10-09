@@ -6,7 +6,7 @@
 * минимизировать вспомогательную переменную ``t`` при ``-t <= M(z_k) <= t``
   для всех сечений;
 * при условии баланса сил ``sum(F1) + sum(F2) + sum(F3) = 0``;
-* и нулевом моменте на конце вала ``M(z[-1]) = 0``.
+* и нулевом суммарном внешнем моменте ``M(z[-1]) = 0``.
 
 Это гарантирует глобальный минимум (в отличие от градиентных методов на
 негладкой функции ``max(|...|)``).
@@ -116,7 +116,7 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
     A_ub[n_z:, t_idx] = -1.0
     b_ub[n_z:] = M_fixed
 
-    # Баланс сил и нулевой момент на конце вала
+    # Баланс сил и нулевой суммарный внешний момент
     A_eq = np.zeros((2, n_vars))
     b_eq = np.zeros(2)
     A_eq[0, 0:n_free] = omega ** 2
@@ -139,7 +139,7 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
                             L3=None, s_bounds=None,
                             axis: str = "x", verbose: bool = True) -> dict:
     """Подбирает коэффициенты s_i (F3_i = s_i * omega^2), минимизируя max|M(z)|
-    при балансе сил и нулевом моменте на конце вала.
+    при балансе сил и нулевом суммарном внешнем моменте.
 
     Параметры:
         z, L1, F1, L2, F2 — как в ``total_distribution``.
@@ -164,7 +164,7 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
             print(f"[{axis}] max|M| = {np.max(np.abs(lp.M_fixed)) * NMM_TO_NM:.4f} Н·м")
             print(f"[{axis}] баланс сил = "
                   f"{round(np.sum(F1) + np.sum(F2) + np.sum(s_all) * omega ** 2, 6)} Н")
-            print(f"[{axis}] момент на конце M(z[-1]) = "
+            print(f"[{axis}] суммарный внешний момент M(z[-1]) = "
                   f"{round(lp.M_fixed[-1] * NMM_TO_NM, 6)} Н·м")
         return {"s": lp.s_const_vals, "F3": lp.s_const_vals * omega ** 2,
                 "M": lp.M_fixed, "success": True, "result": None, "lp": lp}
@@ -184,7 +184,7 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
         print(f"[{axis}] s = {np.round(s_full, 4)}")
         print(f"[{axis}] баланс сил = "
               f"{round(np.sum(F1) + np.sum(F2) + np.sum(s_full) * omega ** 2, 6)} Н")
-        print(f"[{axis}] момент на конце M(z[-1]) = "
+        print(f"[{axis}] суммарный внешний момент M(z[-1]) = "
               f"{round(M_opt[-1] * NMM_TO_NM, 6)} Н·м")
 
     return {"s": s_full, "F3": F3_opt, "M": M_opt, "success": res.success,

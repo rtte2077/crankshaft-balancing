@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from crankshaft_balancing import (analyze, make_initial_coefficients,
+from crankshaft_balancing import (analyze, make_initial_coefficients, total_distribution,
                                   optimize_counterweights,
                                   optimize_counterweights_history,
                                   sweep_sensitivity, verify_kkt_conditions,
@@ -30,9 +30,20 @@ def test_regression_max_moment(result):
     assert result.max_moment_x == pytest.approx(0.0, abs=1e-6)
 
 
-def test_symmetric_shaft_gives_symmetric_coefficients(result):
-    s = result.result_y["s"]
-    assert np.allclose(s, s[::-1], atol=1e-6)
+def test_mirrored_coefficients_are_also_optimal(result):
+    # Вал симметричен, поэтому зеркальный набор s тоже оптимален. Сами коэффициенты
+    # могут отличаться между версиями SciPy/HiGHS: оптимум неединственен (при том же
+    # max|M|), поэтому сравниваем значение цели, а не векторы s.
+    f, w = result.forces, result.engine.angular_speed
+    r = result.result_y
+    s_mirror = r["s"][::-1]
+    M = total_distribution(result.Z, f.L_cheeks, f.Fy_cheeks, f.L_crankpins,
+                           f.Fy_crankpins, F3=s_mirror * w ** 2,
+                           L3=result.L_counterweights)
+    assert np.max(np.abs(M)) == pytest.approx(np.max(np.abs(r["M"])), rel=1e-6)
+    assert f.Fy_cheeks.sum() + f.Fy_crankpins.sum() + s_mirror.sum() * w ** 2 \
+        == pytest.approx(0, abs=1e-6)
+    assert M[-1] * NMM_TO_NM == pytest.approx(0, abs=1e-6)
 
 
 def test_global_optimum_certificates(result):
