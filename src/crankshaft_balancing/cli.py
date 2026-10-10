@@ -27,6 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--csv", metavar="ФАЙЛ",
                    help="сохранить таблицу статических моментов противовесов в CSV "
                         "(без этого ключа CSV кладётся в папку --out вместе с графиками)")
+    p.add_argument("--table-lang", choices=["ru", "en"], default="ru",
+                   help="язык подписей таблицы противовесов в консоли и на картинке "
+                        "(остальные графики и сообщения — на русском)")
     p.add_argument("--no-plots", action="store_true", help="только расчёт, без графиков")
     p.add_argument("--verify", action="store_true",
                    help="проверить глобальность оптимума (двойственность + ККТ)")
@@ -77,7 +80,7 @@ def main(argv=None) -> int:
     print(f"\nmax|Mx| = {res.max_moment_x:.4f} Н·м, max|My| = {res.max_moment_y:.4f} Н·м")
 
     rows = counterweight_rows(res)
-    print("\n" + format_counterweight_table(rows))
+    print("\n" + format_counterweight_table(rows, lang=args.table_lang))
     if args.csv:
         save_counterweight_csv(rows, args.csv)
         print(f"Таблица сохранена: {args.csv}")
@@ -97,12 +100,15 @@ def main(argv=None) -> int:
 
     import matplotlib
     matplotlib.use("Agg")  # без окон — графики только в файлы
-    from .plotting import plot_distribution, plot_moment_3d, plot_sensitivity
+    from .plotting import (plot_counterweight_table, plot_distribution,
+                           plot_moment_3d, plot_sensitivity)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     if not args.csv:
         save_counterweight_csv(rows, out / "counterweights.csv")
+    plot_counterweight_table(rows, save_path=out / "counterweights.png", show=False,
+                             lang=args.table_lang)
     f, Z, L = res.forces, res.Z, res.engine.crankshaft_length
 
     for axis, Fc, Fp, r in (("x", f.Fx_cheeks, f.Fx_crankpins, res.result_x),

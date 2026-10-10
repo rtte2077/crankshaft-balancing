@@ -4,6 +4,8 @@
 ![python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
+**Русский** · [English](README.en.md)
+
 Расчёт балансировки коленчатого вала **любой конфигурации**: любое число цилиндров,
 рядный или V-образный двигатель, любая раскладка щёк и шатунных шеек.
 
@@ -143,19 +145,19 @@ crankbalance examples/example_shaft.json --verify --out output
 ```
 Длина коленвала (из геометрии): 524.000 мм
 Шаг колена (из геометрии):      131.000 мм
-[y] max|M| = 135.4887 Н·м
+[y] max|M| = 135.5133 Н·м
 [y] баланс сил = -0.0 Н
 [y] суммарный внешний момент M(z[-1]) = 0.0 Н·м
 ...
-max|Mx| = 0.0000 Н·м, max|My| = 135.4887 Н·м
+max|Mx| = 0.0000 Н·м, max|My| = 135.5133 Н·м
 
 Статические моменты противовесов s = m·r (s_x — по оси y JSON, s_y — по оси z JSON;
  угол — от оси z в сторону оси y, 0..360°)
   №     x, мм  s_x (y), кг·м  s_y (z), кг·м  |s|, кг·м  угол от z, °
 --------------------------------------------------------------------
   0    31.469         0.0000        -0.1178     0.1178        180.00
-  1    99.531         0.0000        -0.2607     0.2607        180.00
-  2   162.469         0.0000         0.2607     0.2607          0.00
+  1    99.531         0.0000        -0.2235     0.2235        180.00
+  2   162.469         0.0000         0.1549     0.1549          0.00
 ...
 [y] условия ККТ выполнены -> ГЛОБАЛЬНЫЙ ОПТИМУМ ПОДТВЕРЖДЁН
 ```
@@ -174,6 +176,7 @@ max|Mx| = 0.0000 Н·м, max|My| = 135.4887 Н·м
 | `--step ММ` | шаг сетки сечений, мм (по умолчанию `0.01`); больший шаг считает быстрее, но чуть грубее |
 | `--verify` | проверить глобальность оптимума (двойственность и ККТ) |
 | `--csv ФАЙЛ` | сохранить таблицу статических моментов противовесов в CSV (без этого ключа она сохраняется в `--out/counterweights.csv` вместе с графиками) |
+| `--table-lang ru\|en` | язык подписей таблицы противовесов в консоли и на картинке (по умолчанию `ru`; остальные графики и сообщения пока только на русском) |
 | `--no-plots` | только расчёт, без графиков и файлов (таблица всё равно печатается) |
 | `--sensitivity` | сохранить графики чувствительности `max|M|` к каждому коэффициенту `s_i` |
 | `--convergence` | сохранить графики сходимости симплекс-метода (грубая сетка 2 мм; нужен SciPy, где ещё есть `linprog(method='simplex')`; для оси X ставятся границы ±5, как в исходном ноутбуке) |
@@ -185,7 +188,8 @@ max|Mx| = 0.0000 Н·м, max|My| = 135.4887 Н·м
 |---|---|
 | `moment_x_raw.png`, `moment_y_raw.png` | эпюры момента до оптимизации |
 | `moment_x_optimized.png`, `moment_y_optimized.png` | эпюры после подбора противовесов |
-| `counterweights.csv` | таблица статических моментов противовесов |
+| `counterweights.png` | таблица статических моментов противовесов в виде картинки |
+| `counterweights.csv` | та же таблица для Excel и скриптов |
 | `moment_3d.png` | суммарный момент $(M_x, M_y)$ вдоль вала |
 | `moment_3d.html` | то же, интерактивно (только с `--interactive`) |
 | `sensitivity_x.png`, `sensitivity_y.png` | чувствительность к коэффициентам (только с `--sensitivity`) |
@@ -454,7 +458,13 @@ res = analyze(engine, components, counterweight_positions=[31.469, 99.531, 262.0
 
 После каждого расчёта печатается таблица: для каждого противовеса — положение вдоль вала,
 статический момент `s = m·r` (кг·м) **по составляющим**, его **суммарный модуль** и
-**угол от оси z**. Та же таблица сохраняется в `counterweights.csv`.
+**угол от оси z**. Та же таблица сохраняется картинкой `counterweights.png` и в
+`counterweights.csv`.
+
+![Таблица статических моментов противовесов](docs/img/counterweights_table.png)
+
+*Пример `examples/example_shaft_constrained.json`: на щеках 2 и 5 противовесов нет, поэтому
+строки выделены серым, а вместо угла стоит прочерк.*
 
 | Столбец | Смысл |
 |---|---|
@@ -507,11 +517,13 @@ $$\varphi = \operatorname{atan2}(s_x,\, s_y) \bmod 360^\circ$$
 ```python
 from crankshaft_balancing import (analyze, counterweight_rows, format_counterweight_table,
                                   save_counterweight_csv)
+from crankshaft_balancing.plotting import plot_counterweight_table
 
 res = analyze(engine, components)
 rows = counterweight_rows(res)                  # список CounterweightRow
-print(format_counterweight_table(rows))
+print(format_counterweight_table(rows))         # lang="en" — английские подписи
 save_counterweight_csv(rows, "counterweights.csv")
+plot_counterweight_table(rows, save_path="counterweights.png")   # или .pdf / .svg
 
 rows[3].s_x, rows[3].s_y, rows[3].s_abs, rows[3].angle_deg
 ```
@@ -669,7 +681,8 @@ verify_kkt_conditions(res.result_y, axis="y")
 | `verify_optimum_via_duality`, `verify_kkt_conditions` | сертификаты оптимальности |
 | `sweep_sensitivity(...)` | вариация `s_i` вокруг оптимума |
 | `counterweight_rows(res)`, `format_counterweight_table(rows)`, `save_counterweight_csv(rows, path)` | таблица статических моментов: компоненты, модуль, угол от оси z |
-| `plotting.plot_distribution` | эпюра момента с подписями сил |
+| `plotting.plot_counterweight_table(rows, save_path, lang)` | таблица противовесов картинкой (PNG, PDF, SVG; подписи `ru` или `en`) |
+| `plotting.plot_distribution` | эпюра момента с подписями сил; подписи осей и кривой задаются параметрами `xlabel`, `curve_label` |
 | `plotting.plot_moment_3d` | 3D-график $(M_x, M_y)$, статичный или интерактивный |
 | `plotting.plot_convergence`, `plotting.plot_sensitivity` | сходимость и чувствительность |
 
@@ -695,7 +708,7 @@ verify_kkt_conditions(res.result_y, axis="y")
 
 - ограничения на противовесы в JSON и в `analyze()` (`zero`, `fixed`, `bounds`, оси `x`/`y`/`all`) с проверкой номеров и границ;
 - свои позиции противовесов через `counterweight_positions`;
-- таблица статических моментов противовесов: составляющие, суммарный модуль, угол от оси z (печать и CSV);
+- таблица статических моментов противовесов: составляющие, суммарный модуль, угол от оси z (печать, картинка и CSV);
 - расчёт с полностью зафиксированными коэффициентами (в ноутбуке такой вызов падал: решателю нечего оптимизировать);
 - единая сборка матриц ЛП (`build_counterweight_lp`) вместо трёх копий кода;
 - чтение вала из JSON, команда `crankbalance`, сохранение графиков в файлы, тесты, CI.
@@ -728,6 +741,7 @@ crankshaft-balancing/
 ├── notebooks/demo.ipynb     # демонстрация с графиками
 ├── tests/                   # pytest
 ├── docs/theory.md           # постановка задачи и формулы
+├── docs/make_readme_images.py  # пересоздаёт картинки из docs/img (ru и en)
 ├── .github/workflows/       # автотесты на GitHub Actions
 ├── pyproject.toml           # метаданные пакета и зависимости
 └── requirements.txt
@@ -750,7 +764,7 @@ pytest
   для симметричного вала тоже оптимален, значение max|M| (регрессия по исходному расчёту), фиксация
   коэффициентов, сертификаты двойственности и ККТ;
 - ограничения: `zero`, `fixed`, `bounds`, перекрытие `all` осью, свои позиции противовесов, невозможные постановки (`RuntimeError`), неверные номера и границы, сертификаты оптимальности с ограничениями;
-- таблицу противовесов: соглашение об угле (0°/90°/180°/270°), модуль, прочерк для убранного противовеса, устойчивость к шуму решателя, CSV;
+- таблицу противовесов: соглашение об угле (0°/90°/180°/270°), модуль, прочерк для убранного противовеса, устойчивость к шуму решателя, CSV, картинку таблицы (ru/en, PNG и SVG);
 - командную строку: создание файлов графиков, `--sensitivity`, `--convergence`, вывод таблицы, `--csv`.
 
 ## Ограничения

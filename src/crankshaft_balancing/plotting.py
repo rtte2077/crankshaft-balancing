@@ -20,18 +20,22 @@ def plot_distribution(z: np.ndarray, result: np.ndarray, shaft_length: float,
                       groups: Optional[Sequence[dict]] = None,
                       title: str = "Результат вдоль вала",
                       ylabel: str = "Результат",
-                      save_path: Optional[str] = None, show: bool = True):
+                      save_path: Optional[str] = None, show: bool = True,
+                      xlabel: str = ("Координата вдоль вала (0 = левый конец, "
+                                     "L0 = правый конец)"),
+                      curve_label: str = "Результат"):
     """График result(z) в реальных координатах вала (0 слева, shaft_length справа).
 
     ``z`` отсчитывается от ПРАВОГО конца, поэтому x = shaft_length - z.
     ``groups`` — список словарей {"L":.., "F":.., "name":..} с точками приложения
-    сил, которые подписываются на графике.
+    сил, которые подписываются на графике. ``xlabel`` и ``curve_label`` — подписи
+    оси и кривой (по умолчанию русские; для английского графика передайте свои).
     """
     z = np.asarray(z, dtype=float)
     x = shaft_length - z
 
     fig = plt.figure(figsize=(11, 6))
-    plt.plot(x, result, linewidth=2, color="#2563eb", label="Результат", zorder=3)
+    plt.plot(x, result, linewidth=2, color="#2563eb", label=curve_label, zorder=3)
 
     if groups:
         colors = ["#dc2626", "#16a34a", "#9333ea", "#ea580c"]
@@ -63,7 +67,7 @@ def plot_distribution(z: np.ndarray, result: np.ndarray, shaft_length: float,
                                boxstyle="round,pad=0.2", alpha=0.9),
                      zorder=4)
 
-    plt.xlabel("Координата вдоль вала (0 = левый конец, L0 = правый конец)")
+    plt.xlabel(xlabel)
     plt.ylabel(ylabel)
     plt.title(title)
     plt.grid(True, alpha=0.3)
@@ -212,4 +216,59 @@ def plot_sensitivity(curves: list, s_opt: np.ndarray, axis: str = "",
     fig.supxlabel("Значение коэффициента s_i (красная линия — найденный оптимум)")
     fig.supylabel("max|M|, Н·м")
     plt.tight_layout()
+    return _finish(fig, save_path, show)
+
+
+def plot_counterweight_table(rows: Sequence, title: Optional[str] = None,
+                             save_path: Optional[str] = None, show: bool = True,
+                             lang: str = "ru"):
+    """Таблица статических моментов противовесов в виде картинки.
+
+    ``rows`` — результат ``counterweight_rows(res)``. Формат файла определяется
+    расширением ``save_path`` (png, pdf, svg). Строки с убранным противовесом
+    (``s = 0``) выделены серым, в столбце угла у них прочерк.
+    ``lang`` — язык подписей: ``"ru"`` или ``"en"``; ``title`` — свой заголовок.
+    """
+    import math
+
+    from .report import get_labels
+
+    labels = get_labels(lang)
+    cells = []
+    for r in rows:
+        angle = "—" if math.isnan(r.angle_deg) else f"{r.angle_deg:.2f}"
+        cells.append([str(r.number), f"{r.x:.3f}", f"{r.s_x:+.4f}", f"{r.s_y:+.4f}",
+                      f"{r.s_abs:.4f}", angle])
+
+    n_rows = max(len(cells), 3)               # минимум 3 строки высоты — иначе шапка сжимается
+    height = 1.58 + 0.26 * n_rows           # дюймы: заголовок + таблица + пояснение
+    fig, ax = plt.subplots(figsize=(9, height))
+    ax.axis("off")
+
+    table = ax.table(cellText=cells, colLabels=labels["columns"], cellLoc="center",
+                     loc="upper center", colWidths=[0.07, 0.15, 0.2, 0.2, 0.17, 0.21])
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+    table.scale(1, 1.6)
+
+    header_color, zebra_color, zero_color = "#2563eb", "#eff4ff", "#e5e7eb"
+    for (row, _col), cell in table.get_celld().items():
+        cell.set_edgecolor("#cbd5e1")
+        if row == 0:
+            cell.set_facecolor(header_color)
+            cell.set_text_props(color="white", fontweight="bold")
+            cell.set_height(cell.get_height() * 1.5)
+            continue
+        item = rows[row - 1]
+        if item.s_abs == 0:
+            cell.set_facecolor(zero_color)
+            cell.set_text_props(color="#6b7280")
+        else:
+            cell.set_facecolor(zebra_color if row % 2 == 0 else "white")
+
+    fig.suptitle(title or labels["title"], fontsize=14, fontweight="bold",
+                 y=1 - 0.12 / height)
+    fig.text(0.5, 0.1 / height, labels["footnote"], ha="center", va="bottom",
+             fontsize=8.5, color="#475569")
+    fig.subplots_adjust(top=1 - 0.55 / height, bottom=0.62 / height, left=0.03, right=0.97)
     return _finish(fig, save_path, show)

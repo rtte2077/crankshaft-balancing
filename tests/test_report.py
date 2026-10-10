@@ -89,3 +89,34 @@ def test_cli_explicit_csv_without_plots(tmp_path):
     target = tmp_path / "my.csv"
     assert main([str(EXAMPLE), "--no-plots", "--step", "0.1", "--csv", str(target)]) == 0
     assert target.exists()
+
+
+def test_table_image_is_created(tmp_path):
+    from crankshaft_balancing.plotting import plot_counterweight_table
+    rows = rows_from_components([10.0, 20.0, 30.0], [0.0, 0.1, 0.0], [0.5, 0.2, 0.0])
+    for lang in ("ru", "en"):
+        path = tmp_path / f"t_{lang}.png"
+        fig = plot_counterweight_table(rows, save_path=path, show=False, lang=lang)
+        assert path.stat().st_size > 5000
+        assert fig is not None
+    plot_counterweight_table(rows, save_path=tmp_path / "t.svg", show=False)
+    assert (tmp_path / "t.svg").exists()
+
+
+def test_table_unknown_language_rejected():
+    rows = rows_from_components([1.0], [0.0], [0.5])
+    with pytest.raises(ValueError):
+        format_counterweight_table(rows, lang="de")
+
+
+def test_english_text_table():
+    rows = rows_from_components([1.0], [0.0], [0.5])
+    text = format_counterweight_table(rows, lang="en")
+    assert "Counterweight static moments" in text and "angle from z" in text
+
+
+def test_cli_creates_table_image_in_english(tmp_path, capsys):
+    assert main([str(EXAMPLE), "--out", str(tmp_path), "--step", "0.1",
+                 "--table-lang", "en"]) == 0
+    assert (tmp_path / "counterweights.png").exists()
+    assert "Counterweight static moments" in capsys.readouterr().out

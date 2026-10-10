@@ -21,6 +21,44 @@ from typing import List, Sequence, Union
 
 import numpy as np
 
+# Подписи таблицы. Язык влияет только на тексты таблицы (консоль и картинка).
+LABELS = {
+    "ru": {
+        "title": "Статические моменты противовесов",
+        "columns": ["№", "x, мм", "s_x (ось y)\nкг·м", "s_y (ось z)\nкг·м",
+                    "|s|\nкг·м", "угол от оси z\nградусы"],
+        "footnote": ("s = m·r — статический момент противовеса; s_x и s_y — составляющие по "
+                     "осям y и z (расчётные «x» и «y»).\n"
+                     "Угол отсчитывается от оси z в сторону оси y, 0…360°."),
+        "text_title": ["Статические моменты противовесов s = m·r "
+                       "(s_x — по оси y JSON, s_y — по оси z JSON;",
+                       " угол — от оси z в сторону оси y, 0..360°)"],
+        "text_columns": ["№", "x, мм", "s_x (y), кг·м", "s_y (z), кг·м", "|s|, кг·м",
+                         "угол от z, °"],
+    },
+    "en": {
+        "title": "Counterweight static moments (unbalance)",
+        "columns": ["No.", "x, mm", "s_x (y axis)\nkg·m", "s_y (z axis)\nkg·m",
+                    "|s|\nkg·m", "Phase angle\nfrom z axis, deg"],
+        "footnote": ("s = m·r — static moment (unbalance) of a counterweight; s_x, s_y — "
+                     "components along the y and z axes (calculation axes x and y).\n"
+                     "The angle is measured from the z axis toward the y axis, 0…360°."),
+        "text_title": ["Counterweight static moments s = m·r "
+                       "(s_x — along the JSON y axis, s_y — along the JSON z axis;",
+                       " angle — from the z axis toward the y axis, 0..360 deg)"],
+        "text_columns": ["No.", "x, mm", "s_x (y), kg·m", "s_y (z), kg·m", "|s|, kg·m",
+                         "angle from z, deg"],
+    },
+}
+
+
+def get_labels(lang: str) -> dict:
+    """Подписи таблицы для языка ``"ru"`` или ``"en"``."""
+    if lang not in LABELS:
+        raise ValueError(f"Неизвестный язык {lang!r}; доступны: {sorted(LABELS)}")
+    return LABELS[lang]
+
+
 # Компоненты меньше этой доли от максимальной считаются численным шумом решателя
 # (например, 1e-17 вместо нуля) и обнуляются, чтобы угол не «прыгал» между 0° и 360°.
 _NOISE_REL_TOL = 1e-9
@@ -70,18 +108,16 @@ def counterweight_rows(result) -> List[CounterweightRow]:
     return rows_from_components(x_positions, result.result_x["s"], result.result_y["s"])
 
 
-def format_counterweight_table(rows: Sequence[CounterweightRow]) -> str:
-    """Текстовая таблица для печати в консоль."""
-    header = (f"{'№':>3} {'x, мм':>9} {'s_x (y), кг·м':>14} {'s_y (z), кг·м':>14} "
-              f"{'|s|, кг·м':>10} {'угол от z, °':>13}")
-    lines = ["Статические моменты противовесов s = m·r "
-             "(s_x — по оси y JSON, s_y — по оси z JSON;",
-             " угол — от оси z в сторону оси y, 0..360°)",
-             header, "-" * len(header)]
+def format_counterweight_table(rows: Sequence[CounterweightRow], lang: str = "ru") -> str:
+    """Текстовая таблица для печати в консоль (``lang``: ``"ru"`` или ``"en"``)."""
+    labels = get_labels(lang)
+    c = labels["text_columns"]
+    header = (f"{c[0]:>3} {c[1]:>9} {c[2]:>14} {c[3]:>14} {c[4]:>10} {c[5]:>17}")
+    lines = [*labels["text_title"], header, "-" * len(header)]
     for r in rows:
         angle = "—" if math.isnan(r.angle_deg) else f"{r.angle_deg:.2f}"
         lines.append(f"{r.number:>3} {r.x:>9.3f} {r.s_x:>14.4f} {r.s_y:>14.4f} "
-                     f"{r.s_abs:>10.4f} {angle:>13}")
+                     f"{r.s_abs:>10.4f} {angle:>17}")
     return "\n".join(lines)
 
 
