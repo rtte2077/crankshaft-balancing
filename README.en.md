@@ -9,6 +9,14 @@
 Balancing of a crankshaft of **any configuration**: any number of cylinders, in-line or
 V-engine, any arrangement of crank webs and crankpins.
 
+> **Axes.** **The shaft axis is the `x` axis**: the `x` coordinate of every element is its
+> position along the shaft. The cross section is the `YZ` plane, and `y` and `z` are the
+> coordinates of the element's centre of mass in that plane. Note: in the calculation
+> results (`result_x`, `s_x`, `Mx`) the letters "x" and "y" denote the two **components in
+> the section plane** (the `y` and `z` fields of the JSON), not the shaft axis. See
+> [Coordinate system](#coordinate-system-and-units) and [Axes in the calculation and in the
+> JSON](#axes-in-the-calculation-and-in-the-json).
+
 Given a description of the shaft (positions and masses of the crank webs and crankpins,
 angular speed), the program:
 
