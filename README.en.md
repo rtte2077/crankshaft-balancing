@@ -345,6 +345,14 @@ A ready-made example is [`examples/example_shaft_constrained.json`](examples/exa
 crankbalance examples/example_shaft_constrained.json --verify
 ```
 
+In this example the `counterweights` block removes the counterweights on crank webs 2 and 5
+(`"all": {"zero": [2, 5]}`) and limits the outer ones. That is why those two rows of the
+result table are greyed out: the coefficients there are zero by construction, the angle is
+undefined (a dash), and the remaining counterweights are recomputed so that force
+equilibrium and a zero resultant external moment still hold.
+
+![Counterweight table for the constrained example](docs/img/counterweights_table_constrained_en.png)
+
 **What it applies to** (first-level keys):
 
 | Key | Applies to |
@@ -498,8 +506,10 @@ magnitude** and its **phase angle from the z axis**. The same table is saved as 
 
 ![Table of counterweight static moments](docs/img/counterweights_table_en.png)
 
-*Example `examples/example_shaft_constrained.json`: there are no counterweights on crank
-webs 2 and 5, so those rows are greyed out and show a dash instead of an angle.*
+*Example `examples/example_shaft.json`: counterweights have been selected on all 8 crank
+webs. If a counterweight has been removed by a constraint (`zero`), its row is greyed out
+and shows a dash instead of an angle — see the example in the section [Counterweight
+constraints](#counterweight-constraints).*
 
 | Column | Meaning |
 |---|---|
@@ -526,7 +536,7 @@ and the whole vector lies on the z axis.
 
 ### How the angle is computed
 
-$$\varphi = \operatorname{atan2}(s_x,\, s_y) \bmod 360^\circ$$
+$$\varphi = \text{atan2}(s_x, s_y) \bmod 360^\circ$$
 
 The angle is measured from the positive direction of the z axis toward the positive
 direction of the y axis:

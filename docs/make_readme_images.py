@@ -43,14 +43,21 @@ plot_distribution(
     curve_label="Bending moment",
     save_path=OUT / "moment_y_optimized_en.png", show=False)
 
-# 2. Таблица противовесов (пример с ограничениями: видны убранные противовесы)
-cfg = ROOT / "examples" / "example_shaft_constrained.json"
-engine, components = load_shaft(cfg)
-res_c = analyze(engine, components, step=0.01, verbose=False,
-                constraints=load_constraints(cfg))
-rows = counterweight_rows(res_c)
+# 2. Таблица противовесов, основной пример без ограничений: 8 щёк — 8 противовесов
+rows = counterweight_rows(res)
 plot_counterweight_table(rows, save_path=OUT / "counterweights_table.png",
                          show=False, lang="ru")
 plot_counterweight_table(rows, save_path=OUT / "counterweights_table_en.png",
+                         show=False, lang="en")
+
+# 3. Та же таблица для примера с ограничениями: на щеках 2 и 5 противовесов нет
+cfg = ROOT / "examples" / "example_shaft_constrained.json"
+engine_c, components_c = load_shaft(cfg)
+res_c = analyze(engine_c, components_c, step=0.01, verbose=False,
+                constraints=load_constraints(cfg))
+rows_c = counterweight_rows(res_c)
+plot_counterweight_table(rows_c, save_path=OUT / "counterweights_table_constrained.png",
+                         show=False, lang="ru")
+plot_counterweight_table(rows_c, save_path=OUT / "counterweights_table_constrained_en.png",
                          show=False, lang="en")
 print("Готово:", *sorted(p.name for p in OUT.iterdir()), sep="\n  ")

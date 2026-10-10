@@ -24,3 +24,10 @@ def test_relative_links_and_images_exist(name):
 def test_readmes_link_to_each_other():
     assert "README.en.md" in (ROOT / "README.md").read_text(encoding="utf-8")
     assert "README.md" in (ROOT / "README.en.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("name", READMES)
+def test_no_latex_macros_rejected_by_github(name):
+    # GitHub (MathJax) не принимает \operatorname — формула превращается в сообщение об ошибке
+    text = (ROOT / name).read_text(encoding="utf-8")
+    assert "\\operatorname" not in text
