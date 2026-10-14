@@ -144,6 +144,11 @@ coordinates are used only to establish the order):
   between them: `main_journal_width` is added;
 - the shaft ends with half of a main journal.
 
+The widths in the `engine` block are **defaults**. Any individual crank web or crankpin
+can be given its own thickness with the `width` key of the element, and any individual
+main journal via `engine.main_journal_widths` (see below). The given thickness is then
+used in the sum; all other elements use the defaults.
+
 The derivation of the formulas is in [docs/theory.md](docs/theory.md) (in Russian).
 
 ## Installation
@@ -283,8 +288,20 @@ All keys are optional; missing ones take the defaults (which coincide with the e
 | `main_journal_width` | width of a main journal | mm |
 | `crankpin_journal_width` | width of a crankpin | mm |
 | `cheek_width` | width of a crank web | mm |
+| `main_journal_widths` | optional: widths of individual main journals, `{"index": width}` | mm |
 
-The three widths are used **only** to derive the shaft length automatically.
+The widths are used **only** to derive the shaft length automatically.
+`main_journal_width`, `crankpin_journal_width` and `cheek_width` are defaults for all
+elements; an individual element can override them.
+
+Main journals are numbered from left to right starting at 0: `0` is the left end journal,
+the last one is the right end journal (half of an end journal's width goes into the
+length), the ones in between are the supporting journals between crank throws. For
+example, for the four-throw example (5 main journals):
+
+```json
+"engine": {"main_journal_width": 37.0, "main_journal_widths": {"0": 47.0, "2": 30.0}}
+```
 
 Conversion of engine speed to angular speed: $\omega = 2\pi n / 60$, where $n$ is the
 speed in rpm. For $n = 2300$ rpm, $\omega \approx 240.9$ rad/s.
@@ -299,6 +316,13 @@ Every crank web and every crankpin is a separate element:
 | `x` | position of the centre of mass along the shaft axis | mm |
 | `y`, `z` | position of the centre of mass in the section plane | mm |
 | `mass` | mass of the element | kg |
+| `width` | optional: thickness of this particular element along the shaft axis; if omitted, `cheek_width` or `crankpin_journal_width` is used | mm |
+
+For example, a crank web 32 mm thick instead of the default 28 mm:
+
+```json
+{"kind": "cheek", "x": 31.469, "y": 0, "z": 26.5926, "mass": 1.8496, "width": 32.0}
+```
 
 The order of the elements in the list does **not** matter: the program sorts them by `x`.
 The number of elements and their arrangement are unrestricted, so a shaft with any number
@@ -722,8 +746,8 @@ Everything below is importable directly from `crankshaft_balancing`, except the 
 | `CounterweightConstraints(fixed, bounds)` | counterweight constraints for one axis; `from_dict` understands `zero`/`fixed`/`bounds` |
 | `load_constraints(path)`, `load_counterweight_positions(path)` | read the `counterweights` block from the JSON |
 | `load_shaft(path)` | reads the JSON, returns `(EngineConfig, list of ShaftComponent)` |
-| `EngineConfig` | angular speed, connecting rod mass, section widths |
-| `ShaftComponent(kind, x, y, z, mass)` | one shaft element (crank web or crankpin) |
+| `EngineConfig` | angular speed, connecting rod mass, default section widths, `main_journal_widths` |
+| `ShaftComponent(kind, x, y, z, mass, width=None)` | one shaft element (crank web or crankpin); `width` is its own thickness |
 | `build_geometry(components)` | sorts by `x`, splits into crank webs and crankpins |
 | `derive_crankshaft_dimensions(geometry, engine)` | shaft length and crank throw pitch |
 | `compute_forces(geometry, engine)` | forces and points of application (`ShaftForces`) |
