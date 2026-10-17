@@ -47,6 +47,7 @@ crankpins (F2), purple — the counterweights found (F3).*
 - [Quick start](#quick-start)
 - [Describing your own shaft](#describing-your-own-shaft)
 - [Counterweight constraints](#counterweight-constraints)
+- [Two groups of static moments](#two-groups-of-static-moments)
 - [Coordinate system and units](#coordinate-system-and-units)
 - [Table of counterweight static moments](#table-of-counterweight-static-moments)
 - [Reading the results](#reading-the-results)
@@ -132,6 +133,10 @@ The problem is solved with HiGHS (`scipy.optimize.linprog`). Unlike gradient met
 applied to the non-smooth function `max(|...|)`, linear programming guarantees the global
 minimum.
 
+This is the default behaviour. The total static moment of the counterweights can be
+limited to get an intermediate option between "minimal moment" and "minimal counterweight
+mass" — see [Two groups of static moments](#two-groups-of-static-moments).
+
 ### Shaft length
 
 The shaft length is not entered by hand. It is derived from the geometry by adding up the
@@ -194,21 +199,24 @@ Output (abridged; the status lines are in Russian):
 [y] суммарный внешний момент M(z[-1]) = 0.0 Н·м      (resultant external moment)
 ...
 max|Mx| = 0.0000 Н·м, max|My| = 135.5133 Н·м
+Группа 2: 100 %; суммарный статический момент (l1): x = 0.000000, y = 1.365334 кг·м
 
 Counterweight static moments s = m·r (s_x — along the JSON y axis, s_y — along the JSON z axis;
  angle — from the z axis toward the y axis, 0..360 deg)
-No.     x, mm  s_x (y), kg·m  s_y (z), kg·m  |s|, kg·m angle from z, deg
-------------------------------------------------------------------------
-  0    31.469         0.0000        -0.1178     0.1178            180.00
-  1    99.531         0.0000        -0.2235     0.2235            180.00
-  2   162.469         0.0000         0.1549     0.1549              0.00
+No.     x, mm  s_x (y), kg·m  s_y (z), kg·m  |s|, kg·m angle from z, deg  |s1| gr.1, kg·m  |s2| gr.2, kg·m
+----------------------------------------------------------------------------------------------------------
+  0    31.469         0.0000        -0.1178     0.1178            180.00           0.0000           0.1178
+  1    99.531         0.0000        -0.2235     0.2235            180.00           0.0000           0.2235
+  2   162.469         0.0000         0.1549     0.1549              0.00           0.0000           0.1549
 ...
 [y] условия ККТ выполнены -> ГЛОБАЛЬНЫЙ ОПТИМУМ ПОДТВЕРЖДЁН      (KKT conditions satisfied -> global optimum confirmed)
 ```
 
 > The values of `s` may differ slightly on your machine. The optimum of the problem is not
-> unique (different sets of `s` give the same minimum of `max|M|`) and the solver picks a
-> different one in different SciPy versions. Compare `max|M|`, not individual coefficients.
+> unique (different sets of `s` give the same minimum of `max|M|`). Among them the set with
+> the smallest sum of `|s|` is taken (step 3 in
+> [Two groups of static moments](#two-groups-of-static-moments)), but even that may not be
+> unique. Compare `max|M|`, not individual coefficients.
 
 Command-line options:
 
@@ -220,6 +228,9 @@ Command-line options:
 | `--verify` | verify global optimality (duality and KKT conditions) |
 | `--csv FILE` | save the counterweight static-moment table to CSV (without this option it is saved to `--out/counterweights.csv` together with the plots) |
 | `--table-lang ru\|en` | language of the counterweight table captions in the console and in the picture (default `ru`) |
+| `--group2-percent P` | share of group 2 of the static moments, 0…100 (default: the value from the JSON, otherwise 100); see [Two groups of static moments](#two-groups-of-static-moments) |
+| `--norm l1\|linf` | static-moment budget: the sum of `|s_i|` (default) or `max|s_i|` |
+| `--group2-sweep` | compute `p` = 0, 10, …, 100 and save `group2_tradeoff.png` and `group2_tradeoff.csv` |
 | `--no-plots` | calculation only, no plots or files (the table is still printed) |
 | `--sensitivity` | save sensitivity plots of `max|M|` to each coefficient `s_i` |
 | `--convergence` | save convergence plots of the simplex method (coarse 2 mm grid; requires a SciPy that still has `linprog(method='simplex')`; for the x axis bounds of ±5 are set, as in the original notebook) |
@@ -237,6 +248,7 @@ Files written to `--out`:
 | `moment_3d.html` | the same, interactive (only with `--interactive`) |
 | `sensitivity_x.png`, `sensitivity_y.png` | sensitivity to the coefficients (only with `--sensitivity`) |
 | `convergence_x.png`, `convergence_y.png` | progress of the simplex method (only with `--convergence`) |
+| `group2_tradeoff.png`, `group2_tradeoff.csv` | `max|M|` and the total static moment versus the share of group 2 (only with `--group2-sweep`; with `--no-plots`, the CSV only) |
 
 ### From Python
 
@@ -519,6 +531,109 @@ $s = m \cdot r$ (kg·m, radius in metres). Hence:
 - **Optimality checks** (duality, KKT, sensitivity) work with constraints too: they confirm
   that the solution found is the global optimum of the constrained problem.
 
+## Two groups of static moments
+
+The static moments of the counterweights can be split into two groups:
+
+- **group 1** — the minimum needed to satisfy the two equalities: force equilibrium and
+  a zero resultant external moment;
+- **group 2** — the additional part, which only reduces `max|M|`.
+
+Before the optimization a percentage `p` (0…100), the share of group 2, is set:
+
+| `p` | Result |
+|---|---|
+| `0` | the configuration with the smallest possible total static moment that still balances the shaft (among those, the one with the smallest `max|M|`) |
+| `100` (default) | the configuration with the smallest possible `max|M|` — what was computed before |
+| `0 < p < 100` | intermediate configurations: the total static moment grows linearly with `p` |
+
+### Formulation
+
+The total static moment along an axis (the budget) is $B = \sum_i |s_i|$. The absolute
+values are linearized with auxiliary variables $u_i \ge s_i$, $u_i \ge -s_i$, so all the
+problems stay linear (HiGHS gives the global optimum):
+
+1. $B_{\min}$ — minimum of $\sum u_i$ subject to the two equalities and the
+   `fixed`/`bounds` constraints; the moment diagram is not constrained. This solution is
+   stored as `s_group1`.
+2. $M_{opt}$ — the smallest possible $\max|M|$ (the original problem).
+3. $B_{\max}$ — minimum of $\sum u_i$ subject to $\max|M| \le M_{opt}(1+\varepsilon)$:
+   among all solutions with the smallest moment, the "lightest" one is taken
+   ($\varepsilon$ = `budget_eps`, default $10^{-9}$).
+4. For a given `p`:
+
+$$B(p) = B_{\min} + \frac{p}{100}\,(B_{\max} - B_{\min}),$$
+
+   and $\min t$ is solved subject to $-t \le M(z_k) \le t$, the two equalities and
+   $\sum_i u_i \le B(p)$.
+
+Fixed coefficients (`fixed`, `zero`) enter the budget as constants. A larger `p` gives a
+larger feasible set, so `max|M|` does not increase with `p`. The derivation is in
+[docs/theory.md](docs/theory.md) (in Russian).
+
+**The axes are independent.** The budget is computed for each axis separately, like the
+whole calculation: $\sum|s_x|$ and $\sum|s_y|$ are minimized separately, **not** the sum
+of vector magnitudes $\sum\sqrt{s_x^2 + s_y^2}$: the latter would couple the axes and take
+the problem out of LP.
+
+An optional mode `norm="linf"` (CLI: `--norm linf`) uses $\max_i |s_i|$ instead of the
+sum as the budget; it is linear too.
+
+**The groups are a breakdown for the report.** Group 2 is defined as
+`s_group2 = s − s_group1` for each counterweight. These are not two physically separate
+weights: each crank web carries one counterweight with the total `s`.
+
+### How to set it
+
+```bash
+crankbalance examples/example_shaft.json --group2-percent 40
+crankbalance examples/example_shaft.json --group2-sweep     # p = 0, 10, …, 100
+```
+
+In the JSON, an optional key in the `counterweights` block:
+
+```json
+"counterweights": {"group2_percent": 40}
+```
+
+From Python: `analyze(engine, components, group2_percent=40)`. An explicitly passed value
+(the `analyze()` argument or `--group2-percent`) overrides the JSON.
+
+`--group2-sweep` saves to `--out` the plot `group2_tradeoff.png` (`max|M|` and the total
+static moment versus `p`, two y axes) and the table `group2_tradeoff.csv`. $B_{\min}$,
+$B_{\max}$ and $M_{opt}$ do not depend on `p`, so they are computed once; for each `p`
+only the step-4 problem is solved (`with_group2_percent`, `group2_sweep`).
+
+In `example_shaft.json` the inline four-cylinder shaft is balanced by itself, so
+$B_{\min} = 0$. At `p = 0` there are no counterweights and $\max|M_y| \approx 2313$ N·m;
+at `p = 100`, $\max|M_y| \approx 135.5$ N·m and $\sum|s_y| \approx 1.37$ kg·m (0.01 mm
+grid; on a coarser grid $B_{\max}$ is slightly different).
+
+### What is added to the result
+
+New keys in `result_x` and `result_y`:
+
+| Key | Meaning |
+|---|---|
+| `s_group1` | solution of step 1 — the reference balancing configuration |
+| `s_group2` | `s − s_group1` |
+| `static_moment_sum` | budget of the final `s` (`Σ|s|` or `max|s|`), kg·m |
+| `static_moment_min`, `static_moment_max` | $B_{\min}$ and $B_{\max}$, kg·m |
+| `group2_percent` | the `p` used |
+| `max_moment_opt` | $M_{opt}$, **N·mm** (like `M`) |
+
+The counterweight table gets the columns `|s₁| group 1` and `|s₂| group 2` (vector
+magnitudes); the CSV gets the components `s1_x_kg_m`, `s1_y_kg_m`, `s2_x_kg_m`,
+`s2_y_kg_m`. Values below $10^{-9}$ of the maximum are zeroed as numerical noise.
+
+### Edge cases
+
+- If the two equalities cannot hold under the given `fixed`/`bounds`, a `RuntimeError`
+  with an explanation is raised.
+- If $B_{\max} = B_{\min}$, all `p` give the same solution; this is reported in the output.
+- If all coefficients are fixed, no optimization is run and `group2_percent` is ignored:
+  `s_group1 = s`, `s_group2 = 0`.
+
 ## Coordinate system and units
 
 - The `x` axis runs along the shaft axis; `y`, `z` lie in the plane of the cross section.
@@ -551,6 +666,7 @@ constraints](#counterweight-constraints).*
 | `s_y (z)` | component along the calculation y axis; this is the `z` field in the JSON |
 | `\|s\|` | resultant magnitude $\sqrt{s_x^2 + s_y^2}$ |
 | `angle from z` | phase angle of the counterweight: from the z axis toward the y axis, 0…360° |
+| `\|s1\| gr.1`, `\|s2\| gr.2` | vector magnitudes of group 1 and group 2 (`s2 = s − s1`), see [Two groups of static moments](#two-groups-of-static-moments); the CSV has the components `s1_x_kg_m`, `s1_y_kg_m`, `s2_x_kg_m`, `s2_y_kg_m` |
 
 ### Axes in the calculation and in the JSON
 
@@ -742,9 +858,10 @@ Everything below is importable directly from `crankshaft_balancing`, except the 
 
 | Function / class | Purpose |
 |---|---|
-| `analyze(engine, components, step=0.01, constraints=None, counterweight_positions=None)` | end-to-end calculation, returns `BalanceResult` |
+| `analyze(engine, components, step=0.01, constraints=None, counterweight_positions=None, group2_percent=100, norm="l1")` | end-to-end calculation, returns `BalanceResult` |
+| `with_group2_percent(res, p)`, `group2_sweep(res, percents)` | recalculation with another share of group 2 without repeating steps 1–3; trade-off table |
 | `CounterweightConstraints(fixed, bounds)` | counterweight constraints for one axis; `from_dict` understands `zero`/`fixed`/`bounds` |
-| `load_constraints(path)`, `load_counterweight_positions(path)` | read the `counterweights` block from the JSON |
+| `load_constraints(path)`, `load_counterweight_positions(path)`, `load_group2_percent(path)` | read the `counterweights` block from the JSON |
 | `load_shaft(path)` | reads the JSON, returns `(EngineConfig, list of ShaftComponent)` |
 | `EngineConfig` | angular speed, connecting rod mass, default section widths, `main_journal_widths` |
 | `ShaftComponent(kind, x, y, z, mass, width=None)` | one shaft element (crank web or crankpin); `width` is its own thickness |
@@ -756,7 +873,9 @@ Everything below is importable directly from `crankshaft_balancing`, except the 
 | `total_distribution(z, L1, F1, L2, F2, F3, L3)` | bending moment by the method of sections, N·mm |
 | `make_initial_coefficients(n, default, overrides)` | initial `s` with the possibility of fixing |
 | `build_counterweight_lp(...)` | assembles the LP matrices |
-| `optimize_counterweights(...)` | counterweight selection (HiGHS) |
+| `optimize_counterweights(..., group2_percent=100, norm="l1", budget_eps=1e-9)` | counterweight selection (HiGHS) with a static-moment budget |
+| `minimal_static_moment(...)`, `minimal_moment_budget(...)` | step 1 (`s`, $B_{\min}$) and steps 2–3 (`s`, $B_{\max}$, $M_{opt}$) |
+| `static_moment(s, norm)` | `Σ|s|` or `max|s|` |
 | `optimize_counterweights_history(...)` | the same with the iteration history (simplex); takes the same `s_init`, `s_fixed`, `s_bounds`, `L3` |
 | `verify_optimum_via_duality`, `verify_kkt_conditions` | optimality certificates |
 | `sweep_sensitivity(...)` | variation of `s_i` around the optimum |
@@ -765,6 +884,7 @@ Everything below is importable directly from `crankshaft_balancing`, except the 
 | `plotting.plot_distribution` | bending moment diagram with force labels; axis and curve captions are set by `xlabel`, `curve_label` |
 | `plotting.plot_moment_3d` | 3D plot of $(M_x, M_y)$, static or interactive |
 | `plotting.plot_convergence`, `plotting.plot_sensitivity` | convergence and sensitivity |
+| `plotting.plot_group2_tradeoff(rows, norm)` | `max|M|` and the static moment versus the share of group 2 |
 
 Every function has a docstring (in Russian) describing its parameters: `help(optimize_counterweights)`.
 

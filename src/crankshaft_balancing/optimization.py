@@ -10,10 +10,28 @@
 
 Это гарантирует глобальный минимум (в отличие от градиентных методов на
 негладкой функции ``max(|...|)``).
+
+Две группы статических моментов (``group2_percent``)
+----------------------------------------------------
+Бюджет ``B`` — суммарный статический момент по оси: ``sum_i |s_i|`` (``norm="l1"``)
+или ``max_i |s_i|`` (``norm="linf"``). Модуль линеаризуется вспомогательными
+переменными ``u_i >= s_i``, ``u_i >= -s_i``, поэтому все задачи остаются ЛП:
+
+1. ``B_min`` — минимальный бюджет, при котором выполняются два равенства
+   (эпюра M не ограничивается) — ``minimal_static_moment``;
+2. ``M_opt`` — минимально возможный ``max|M|`` (исходная задача);
+3. ``B_max`` — минимальный бюджет при ``max|M| <= M_opt`` (с допуском
+   ``budget_eps``) — ``minimal_moment_budget``;
+4. для процента ``p``: ``min t`` при бюджете
+   ``B(p) = B_min + p/100 * (B_max - B_min)`` — ``optimize_counterweights``.
+
+Бюджет считается по каждой оси отдельно: минимизируются ``sum|s_x|`` и ``sum|s_y|``
+по отдельности, а не ``sum sqrt(s_x^2 + s_y^2)`` — последнее связало бы оси и
+вывело задачу из ЛП.
 """
 import warnings
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Union
+from typing import List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from scipy.optimize import linprog
@@ -42,7 +60,9 @@ def make_initial_coefficients(n: int, default: float = 1.0,
 class CounterweightLP:
     """Матрицы ЛП для подбора противовесов + служебные данные.
 
-    Переменные ЛП: [s_free (n_free штук), t].
+    Переменные ЛП: [s_free (n_free штук), u (n_u штук), t]. ``u`` есть только в
+    задачах с бюджетом статического момента: ``n_free`` переменных при
+    ``norm="l1"`` (u_i >= |s_i|) или одна при ``norm="linf"`` (u >= |s_i| для всех i).
     """
 
     A_ub: np.ndarray
@@ -56,10 +76,21 @@ class CounterweightLP:
     s_const_vals: np.ndarray
     M_fixed: np.ndarray
     omega: float
+    n_u: int = 0
+    norm: str = "l1"
+    budget_const: float = 0.0   # вклад зафиксированных s в бюджет (константа)
 
     @property
     def n_free(self) -> int:
         return len(self.free_idx)
+
+    @property
+    def u_slice(self) -> slice:
+        return slice(self.n_free, self.n_free + self.n_u)
+
+    @property
+    def t_idx(self) -> int:
+        return self.n_free + self.n_u
 
     def assemble_solution(self, x: np.ndarray) -> np.ndarray:
         """Полный вектор s (с зафиксированными значениями) из решения ЛП."""
@@ -69,11 +100,49 @@ class CounterweightLP:
         return s_full
 
 
+NORMS = ("l1", "linf")
+
+
+def static_moment(s, norm: str = "l1") -> float:
+    """Суммарный статический момент по оси: ``sum|s_i|`` (l1) или ``max|s_i|`` (linf)."""
+    _check_norm(norm)
+    a = np.abs(np.asarray(s, dtype=float))
+    if a.size == 0:
+        return 0.0
+    return float(a.sum() if norm == "l1" else a.max())
+
+
+def _check_norm(norm: str) -> None:
+    if norm not in NORMS:
+        raise ValueError(f"Неизвестная норма {norm!r}; допустимы: {NORMS}")
+
+
 def build_counterweight_lp(z, L1, F1, L2, F2, omega,
                            s_init: Sequence[Union[float, str]],
                            s_fixed: Optional[Sequence[bool]] = None,
-                           L3=None, s_bounds=None) -> CounterweightLP:
-    """Строит ЛП для подбора коэффициентов противовесов (см. docstring модуля)."""
+                           L3=None, s_bounds=None, *,
+                           budget_vars: bool = False, norm: str = "l1",
+                           objective: str = "t", budget: Optional[float] = None,
+                           t_max: Optional[float] = None,
+                           moment_rows: bool = True) -> CounterweightLP:
+    """Строит ЛП для подбора коэффициентов противовесов (см. docstring модуля).
+
+    Без дополнительных аргументов — исходная задача ``min t``. Остальное нужно
+    для задач с бюджетом статического момента:
+
+    budget_vars — добавить переменные ``u`` (``u >= s``, ``u >= -s``);
+    norm        — ``"l1"`` (бюджет ``sum|s|``) или ``"linf"`` (``max|s|``);
+    objective   — ``"t"`` (min max|M|) или ``"budget"`` (min бюджета);
+    budget      — верхняя граница бюджета ``B`` (с учётом зафиксированных s);
+    t_max       — верхняя граница ``t``, т.е. ``max|M| <= t_max`` (Н·мм);
+    moment_rows — включать ли строки ``-t <= M(z_k) <= t`` (для шага 1 не нужны).
+    """
+    _check_norm(norm)
+    if objective not in ("t", "budget"):
+        raise ValueError(f"Неизвестная цель {objective!r}; допустимы: 't', 'budget'")
+    if (objective == "budget" or budget is not None) and not budget_vars:
+        raise ValueError("Бюджет требует budget_vars=True")
+
     z = np.asarray(z, dtype=float)
     s_init = list(s_init)
 
@@ -101,20 +170,46 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
     # H_free[k, j] = H(z_k - L3[free_idx[j]]) * omega^2  -> (n_z, n_free)
     H_free = heaviside_ramp(z[:, None] - L3_use[None, free_idx]) * omega ** 2
 
-    n_vars = n_free + 1
-    t_idx = n_free
+    n_u = (n_free if norm == "l1" else 1) if budget_vars and n_free else 0
+    n_vars = n_free + n_u + 1
+    t_idx = n_free + n_u
     c = np.zeros(n_vars)
-    c[t_idx] = 1.0
+    if objective == "t":
+        c[t_idx] = 1.0
+    else:
+        c[n_free:t_idx] = 1.0
 
-    # |M(z_k)| <= t  <=>  M - t <= 0  и  -M - t <= 0
-    A_ub = np.zeros((2 * n_z, n_vars))
-    b_ub = np.zeros(2 * n_z)
-    A_ub[0:n_z, 0:n_free] = H_free
-    A_ub[0:n_z, t_idx] = -1.0
-    b_ub[0:n_z] = -M_fixed
-    A_ub[n_z:, 0:n_free] = -H_free
-    A_ub[n_z:, t_idx] = -1.0
-    b_ub[n_z:] = M_fixed
+    rows, rhs = [], []
+    if moment_rows:
+        # |M(z_k)| <= t  <=>  M - t <= 0  и  -M - t <= 0
+        block = np.zeros((2 * n_z, n_vars))
+        block[0:n_z, 0:n_free] = H_free
+        block[n_z:, 0:n_free] = -H_free
+        block[:, t_idx] = -1.0
+        rows.append(block)
+        rhs.append(np.concatenate([-M_fixed, M_fixed]))
+
+    fixed_abs = np.abs(s_const_vals[[i for i in range(n) if s_fixed[i]]])
+    budget_const = static_moment(fixed_abs, norm)
+    if n_u:
+        # u_i >= |s_i|:  s_i - u_i <= 0  и  -s_i - u_i <= 0
+        abs_rows = np.zeros((2 * n_free, n_vars))
+        for j in range(n_free):
+            u_j = n_free + (j if norm == "l1" else 0)
+            abs_rows[2 * j, j], abs_rows[2 * j, u_j] = 1.0, -1.0
+            abs_rows[2 * j + 1, j], abs_rows[2 * j + 1, u_j] = -1.0, -1.0
+        rows.append(abs_rows)
+        rhs.append(np.zeros(2 * n_free))
+        if budget is not None:
+            # l1:   sum u + sum|s_fixed| <= B;   linf: u <= B (max|s_fixed| <= B
+            # обеспечивается тем, что B >= B_min >= max|s_fixed|)
+            row = np.zeros((1, n_vars))
+            row[0, n_free:t_idx] = 1.0
+            rows.append(row)
+            rhs.append(np.array([budget - budget_const if norm == "l1" else budget]))
+
+    A_ub = np.vstack(rows) if rows else np.zeros((0, n_vars))
+    b_ub = np.concatenate(rhs) if rhs else np.zeros(0)
 
     # Баланс сил и нулевой суммарный внешний момент
     A_eq = np.zeros((2, n_vars))
@@ -126,20 +221,90 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
 
     var_bounds = ([(None, None)] * n_free if s_bounds is None
                   else [tuple(s_bounds[i]) for i in free_idx])
-    bounds = var_bounds + [(0, None)]  # t >= 0
+    bounds = var_bounds + [(0, None)] * n_u + [(0, t_max)]  # u >= 0, 0 <= t <= t_max
 
     return CounterweightLP(A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, c=c,
                            bounds=bounds, free_idx=free_idx, L3=L3_use,
-                           s_const_vals=s_const_vals, M_fixed=M_fixed, omega=omega)
+                           s_const_vals=s_const_vals, M_fixed=M_fixed, omega=omega,
+                           n_u=n_u, norm=norm, budget_const=budget_const)
+
+
+def _solve(lp: CounterweightLP, axis: str, what: str = ""):
+    """linprog/HiGHS по матрицам ``lp``; RuntimeError, если решения нет."""
+    res = linprog(lp.c, A_ub=lp.A_ub, b_ub=lp.b_ub, A_eq=lp.A_eq, b_eq=lp.b_eq,
+                  bounds=lp.bounds, method="highs")
+    if res.x is None:
+        raise RuntimeError(f"[{axis}] решатель не нашёл решения: {res.message}{what}")
+    return res
+
+
+def _tolerance(value: float, eps: float) -> float:
+    """Допуск ``eps``: относительный при |value| >= 1, иначе абсолютный."""
+    return eps * max(abs(value), 1.0)
+
+
+def minimal_static_moment(z, L1, F1, L2, F2, omega, s_init, s_fixed=None,
+                          L3=None, s_bounds=None, norm: str = "l1",
+                          axis: str = "x") -> Tuple[np.ndarray, float]:
+    """Шаг 1: минимальный бюджет статического момента, при котором выполняются
+    баланс сил и нулевой суммарный внешний момент (эпюра M не ограничивается).
+
+    Возвращает ``(s, B_min)``; ``s`` — эталонная «уравновешивающая» конфигурация
+    (группа 1). RuntimeError, если два равенства невыполнимы при fixed/bounds.
+    """
+    lp = build_counterweight_lp(z, L1, F1, L2, F2, omega, s_init, s_fixed=s_fixed,
+                                L3=L3, s_bounds=s_bounds, budget_vars=True, norm=norm,
+                                objective="budget", moment_rows=False)
+    if lp.n_free == 0:
+        return lp.s_const_vals.copy(), static_moment(lp.s_const_vals, norm)
+    res = _solve(lp, axis, ". Не выполняются два равенства (баланс сил и нулевой "
+                           "суммарный внешний момент) при заданных fixed/bounds")
+    s = lp.assemble_solution(res.x)
+    return s, static_moment(s, norm)
+
+
+def minimal_moment_budget(z, L1, F1, L2, F2, omega, s_init, s_fixed=None,
+                          L3=None, s_bounds=None, norm: str = "l1",
+                          budget_eps: float = 1e-9,
+                          axis: str = "x") -> Tuple[np.ndarray, float, float]:
+    """Шаги 2-3: ``M_opt`` — минимально возможный max|M| (Н·мм), затем ``B_max`` —
+    минимальный бюджет среди решений с ``max|M| <= M_opt + допуск``.
+
+    Допуск ``budget_eps`` относительный (абсолютный, в Н·мм, при ``M_opt < 1``).
+    Возвращает ``(s, B_max, M_opt)``.
+    """
+    common = dict(s_fixed=s_fixed, L3=L3, s_bounds=s_bounds)
+    lp = build_counterweight_lp(z, L1, F1, L2, F2, omega, s_init, **common)
+    if lp.n_free == 0:
+        s = lp.s_const_vals.copy()
+        return s, static_moment(s, norm), float(np.max(np.abs(lp.M_fixed)))
+    M_opt = float(_solve(lp, axis).x[lp.t_idx])
+
+    lp3 = build_counterweight_lp(z, L1, F1, L2, F2, omega, s_init, **common,
+                                 budget_vars=True, norm=norm, objective="budget",
+                                 t_max=M_opt + _tolerance(M_opt, budget_eps))
+    s = lp3.assemble_solution(_solve(lp3, axis).x)
+    return s, static_moment(s, norm), M_opt
+
+
+def _zero_noise(*arrays: np.ndarray) -> None:
+    """Обнуляет (на месте) значения меньше 1e-9 от максимума — как в report.py."""
+    max_abs = max((float(np.max(np.abs(a), initial=0.0)) for a in arrays), default=0.0)
+    for a in arrays:
+        a[np.abs(a) <= 1e-9 * max_abs] = 0.0
 
 
 def optimize_counterweights(z, L1, F1, L2, F2, omega,
                             s_init: Sequence[Union[float, str]],
                             s_fixed: Optional[Sequence[bool]] = None,
                             L3=None, s_bounds=None,
-                            axis: str = "x", verbose: bool = True) -> dict:
+                            axis: str = "x", verbose: bool = True,
+                            group2_percent: float = 100.0, norm: str = "l1",
+                            budget_eps: float = 1e-9,
+                            levels: Optional[dict] = None) -> dict:
     """Подбирает коэффициенты s_i (F3_i = s_i * omega^2), минимизируя max|M(z)|
-    при балансе сил и нулевом суммарном внешнем моменте.
+    при балансе сил, нулевом суммарном внешнем моменте и бюджете статического
+    момента ``B(p) = B_min + p/100 * (B_max - B_min)``.
 
     Параметры:
         z, L1, F1, L2, F2 — как в ``total_distribution``.
@@ -149,13 +314,31 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
         L3 — точки приложения F3 (по умолчанию совпадают с L1).
         s_bounds — границы [(min, max), ...] для каждого s_i.
         axis — только для подписей в выводе.
+        group2_percent — доля группы 2, 0..100: 0 — минимальный суммарный
+            статический момент, 100 (по умолчанию) — минимальный max|M|.
+        norm — ``"l1"`` (бюджет ``sum|s_i|``) или ``"linf"`` (``max|s_i|``).
+        budget_eps — допуск: в шаге 3 на max|M| (относительный; абсолютный в Н·мм,
+            если M_opt < 1) и на бюджет B(p) (относительный).
+        levels — результат этой же функции для той же задачи: из него берутся
+            ``s_group1``, B_min, B_max, M_opt (шаги 1-3 не пересчитываются).
 
-    Возвращает dict: ``s``, ``F3``, ``M`` (Н·мм), ``success``, ``result`` (linprog)
-    и ``lp`` (CounterweightLP — нужен для проверок оптимальности).
+    Бюджет по каждой оси свой: минимизируется ``sum|s|`` по этой оси, а не
+    сумма модулей векторов ``sqrt(s_x^2 + s_y^2)``.
+
+    Возвращает dict: ``s``, ``F3``, ``M`` (Н·мм), ``success``, ``result`` (linprog),
+    ``lp`` (CounterweightLP — нужен для проверок оптимальности), а также
+    ``s_group1`` (решение шага 1), ``s_group2 = s - s_group1`` (декомпозиция
+    отчёта, а не отдельные грузы), ``static_moment_sum``, ``static_moment_min``
+    (B_min), ``static_moment_max`` (B_max), ``group2_percent``, ``max_moment_opt``
+    (M_opt, Н·мм).
     """
+    if not 0.0 <= float(group2_percent) <= 100.0:
+        raise ValueError(f"group2_percent должен быть в диапазоне 0..100, "
+                         f"получено {group2_percent}")
+    _check_norm(norm)
     z = np.asarray(z, dtype=float)
-    lp = build_counterweight_lp(z, L1, F1, L2, F2, omega, s_init,
-                                s_fixed=s_fixed, L3=L3, s_bounds=s_bounds)
+    common = dict(s_fixed=s_fixed, L3=L3, s_bounds=s_bounds)
+    lp = build_counterweight_lp(z, L1, F1, L2, F2, omega, s_init, **common)
 
     if lp.n_free == 0:
         if verbose:
@@ -166,29 +349,60 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
                   f"{round(np.sum(F1) + np.sum(F2) + np.sum(s_all) * omega ** 2, 6)} Н")
             print(f"[{axis}] суммарный внешний момент M(z[-1]) = "
                   f"{round(lp.M_fixed[-1] * NMM_TO_NM, 6)} Н·м")
-        return {"s": lp.s_const_vals, "F3": lp.s_const_vals * omega ** 2,
-                "M": lp.M_fixed, "success": True, "result": None, "lp": lp}
+        s = lp.s_const_vals
+        B = static_moment(s, norm)
+        return {"s": s, "F3": s * omega ** 2, "M": lp.M_fixed, "success": True,
+                "result": None, "lp": lp,
+                "s_group1": s.copy(), "s_group2": np.zeros_like(s),
+                "static_moment_sum": B, "static_moment_min": B, "static_moment_max": B,
+                "group2_percent": float(group2_percent),
+                "max_moment_opt": float(np.max(np.abs(lp.M_fixed)))}
 
-    res = linprog(lp.c, A_ub=lp.A_ub, b_ub=lp.b_ub, A_eq=lp.A_eq, b_eq=lp.b_eq,
-                  bounds=lp.bounds, method="highs")
-    if res.x is None:
-        raise RuntimeError(f"[{axis}] решатель не нашёл решения: {res.message}")
+    args = (z, L1, F1, L2, F2, omega, s_init)
+    if levels is None:
+        s_group1, B_min = minimal_static_moment(*args, **common, norm=norm, axis=axis)
+        _, B_max, M_opt = minimal_moment_budget(*args, **common, norm=norm,
+                                                budget_eps=budget_eps, axis=axis)
+    else:
+        s_group1 = np.asarray(levels["s_group1"], dtype=float)
+        B_min, B_max = levels["static_moment_min"], levels["static_moment_max"]
+        M_opt = levels["max_moment_opt"]
+    # численно B_max может оказаться чуть меньше B_min — интервал не бывает пустым
+    B_max = max(B_max, B_min)
+    degenerate = B_max - B_min <= _tolerance(B_max, budget_eps)
+
+    B_p = B_min + float(group2_percent) / 100.0 * (B_max - B_min)
+    lp = build_counterweight_lp(*args, **common, budget_vars=True, norm=norm,
+                                budget=B_p * (1.0 + budget_eps))
+    res = _solve(lp, axis)
 
     s_full = lp.assemble_solution(res.x)
+    s_group1 = s_group1.copy()
+    s_group2 = s_full - s_group1
+    _zero_noise(s_group1, s_group2)
     F3_opt = s_full * omega ** 2
-    M_opt = total_distribution(z, L1, F1, L2, F2, F3=F3_opt, L3=lp.L3)
+    M_res = total_distribution(z, L1, F1, L2, F2, F3=F3_opt, L3=lp.L3)
 
     if verbose:
         print(f"[{axis}] статус: {res.message} | успех: {res.success}")
-        print(f"[{axis}] max|M| = {np.max(np.abs(M_opt)) * NMM_TO_NM:.4f} Н·м")
+        print(f"[{axis}] группа 2: {group2_percent:g} %, норма бюджета {norm}: "
+              f"B_min = {B_min:.6f}, B_max = {B_max:.6f}, B(p) = {B_p:.6f} кг·м")
+        if degenerate:
+            print(f"[{axis}] B_max = B_min: группа 2 пуста, все p дают одно решение")
+        print(f"[{axis}] max|M| = {np.max(np.abs(M_res)) * NMM_TO_NM:.4f} Н·м "
+              f"(минимально возможный {M_opt * NMM_TO_NM:.4f} Н·м)")
         print(f"[{axis}] s = {np.round(s_full, 4)}")
         print(f"[{axis}] баланс сил = "
               f"{round(np.sum(F1) + np.sum(F2) + np.sum(s_full) * omega ** 2, 6)} Н")
         print(f"[{axis}] суммарный внешний момент M(z[-1]) = "
-              f"{round(M_opt[-1] * NMM_TO_NM, 6)} Н·м")
+              f"{round(M_res[-1] * NMM_TO_NM, 6)} Н·м")
 
-    return {"s": s_full, "F3": F3_opt, "M": M_opt, "success": res.success,
-            "result": res, "lp": lp}
+    return {"s": s_full, "F3": F3_opt, "M": M_res, "success": res.success,
+            "result": res, "lp": lp,
+            "s_group1": s_group1, "s_group2": s_group2,
+            "static_moment_sum": static_moment(s_full, norm),
+            "static_moment_min": float(B_min), "static_moment_max": float(B_max),
+            "group2_percent": float(group2_percent), "max_moment_opt": float(M_opt)}
 
 
 def optimize_counterweights_history(z, L1, F1, L2, F2, omega,

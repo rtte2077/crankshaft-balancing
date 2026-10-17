@@ -234,19 +234,29 @@ def plot_counterweight_table(rows: Sequence, title: Optional[str] = None,
     from .report import get_labels
 
     labels = get_labels(lang)
+    groups = bool(rows) and all(r.has_groups for r in rows)
     cells = []
     for r in rows:
         angle = "—" if math.isnan(r.angle_deg) else f"{r.angle_deg:.2f}"
         cells.append([str(r.number), f"{r.x:.3f}", f"{r.s_x:+.4f}", f"{r.s_y:+.4f}",
                       f"{r.s_abs:.4f}", angle])
+        if groups:
+            cells[-1] += [f"{r.s1_abs:.4f}", f"{r.s2_abs:.4f}"]
+
+    columns = labels["columns"] + (labels["group_columns"] if groups else [])
+    footnote = labels["footnote"] + (labels["group_footnote"] if groups else "")
+    widths = [0.07, 0.15, 0.2, 0.2, 0.17, 0.21] + ([0.17, 0.17] if groups else [])
+    total = sum(widths)
+    widths = [w / total for w in widths]
+    extra_lines = footnote.count("\n") - 1
 
     n_rows = max(len(cells), 3)               # минимум 3 строки высоты — иначе шапка сжимается
-    height = 1.58 + 0.26 * n_rows           # дюймы: заголовок + таблица + пояснение
-    fig, ax = plt.subplots(figsize=(9, height))
+    height = 1.58 + 0.26 * n_rows + 0.15 * extra_lines   # заголовок + таблица + пояснение
+    fig, ax = plt.subplots(figsize=(11.5 if groups else 9, height))
     ax.axis("off")
 
-    table = ax.table(cellText=cells, colLabels=labels["columns"], cellLoc="center",
-                     loc="upper center", colWidths=[0.07, 0.15, 0.2, 0.2, 0.17, 0.21])
+    table = ax.table(cellText=cells, colLabels=columns, cellLoc="center",
+                     loc="upper center", colWidths=widths)
     table.auto_set_font_size(False)
     table.set_fontsize(11)
     table.scale(1, 1.6)
@@ -268,7 +278,38 @@ def plot_counterweight_table(rows: Sequence, title: Optional[str] = None,
 
     fig.suptitle(title or labels["title"], fontsize=14, fontweight="bold",
                  y=1 - 0.12 / height)
-    fig.text(0.5, 0.1 / height, labels["footnote"], ha="center", va="bottom",
+    fig.text(0.5, 0.1 / height, footnote, ha="center", va="bottom",
              fontsize=8.5, color="#475569")
-    fig.subplots_adjust(top=1 - 0.55 / height, bottom=0.62 / height, left=0.03, right=0.97)
+    fig.subplots_adjust(top=1 - 0.55 / height, bottom=(0.62 + 0.15 * extra_lines) / height,
+                        left=0.03, right=0.97)
+    return _finish(fig, save_path, show)
+
+
+def plot_group2_tradeoff(rows: Sequence[dict], norm: str = "l1",
+                         save_path: Optional[str] = None, show: bool = True):
+    """max|M| (левая ось) и суммарный статический момент (правая ось) от доли
+    группы 2 ``p``. ``rows`` — результат ``analysis.group2_sweep``."""
+    p = [r["group2_percent"] for r in rows]
+    fig, ax_m = plt.subplots(figsize=(9, 5))
+    ax_b = ax_m.twinx()
+    m_color, b_color = "#2563eb", "#ea580c"
+    ax_m.plot(p, [r["max_moment_y"] for r in rows], "-o", color=m_color,
+              label="max|M|, ось Y")
+    ax_m.plot(p, [r["max_moment_x"] for r in rows], "--s", color=m_color, alpha=0.6,
+              label="max|M|, ось X")
+    ax_b.plot(p, [r["static_moment_y"] for r in rows], "-o", color=b_color,
+              label="статический момент, ось Y")
+    ax_b.plot(p, [r["static_moment_x"] for r in rows], "--s", color=b_color, alpha=0.6,
+              label="статический момент, ось X")
+    budget = "Σ|s_i|" if norm == "l1" else "max|s_i|"
+    ax_m.set_xlabel("Доля группы 2 p, %")
+    ax_m.set_ylabel("max|M|, Н·м", color=m_color)
+    ax_b.set_ylabel(f"Суммарный статический момент {budget}, кг·м", color=b_color)
+    ax_m.tick_params(axis="y", colors=m_color)
+    ax_b.tick_params(axis="y", colors=b_color)
+    ax_m.grid(True, alpha=0.3)
+    lines = ax_m.get_lines() + ax_b.get_lines()
+    ax_m.legend(lines, [ln.get_label() for ln in lines], loc="upper center", fontsize=9)
+    ax_m.set_title("Компромисс: max|M| и статический момент противовесов от p")
+    fig.tight_layout()
     return _finish(fig, save_path, show)
