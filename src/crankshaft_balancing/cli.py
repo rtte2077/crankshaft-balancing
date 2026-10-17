@@ -1,19 +1,33 @@
 """Командная строка: ``crankbalance shaft.json [--out output] [--verify] ...``."""
 import argparse
+import csv
 import sys
 from pathlib import Path
 
 import numpy as np
 
-from .analysis import analyze, raw_moments
+from .analysis import analyze, group2_sweep, raw_moments
 from .constraints import resolve_constraints
-from .loader import load_constraints, load_counterweight_positions, load_shaft
+from .loader import (load_constraints, load_counterweight_positions,
+                     load_group2_percent, load_shaft)
 from .optimization import optimize_counterweights_history
 from .report import (counterweight_rows, format_counterweight_table,
                      save_counterweight_csv)
 from .sections import NMM_TO_NM, section_grid
 from .verification import (sweep_sensitivity, verify_kkt_conditions,
                            verify_optimum_via_duality)
+
+
+def _percent(value: str) -> float:
+    """Тип аргумента: число 0..100."""
+    try:
+        p = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"ожидается число 0..100, получено {value!r}")
+    if not 0.0 <= p <= 100.0:
+        raise argparse.ArgumentTypeError(
+            f"доля группы 2 должна быть в диапазоне 0..100, получено {p:g}")
+    return p
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,6 +44,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--table-lang", choices=["ru", "en"], default="ru",
                    help="язык подписей таблицы противовесов в консоли и на картинке "
                         "(остальные графики и сообщения — на русском)")
+    p.add_argument("--group2-percent", type=_percent, default=None, metavar="P",
+                   help="доля группы 2 статических моментов, 0..100: 0 — минимальный "
+                        "суммарный статический момент, 100 — минимальный max|M| "
+                        "(по умолчанию: counterweights.group2_percent из JSON, иначе 100)")
+    p.add_argument("--norm", choices=["l1", "linf"], default="l1",
+                   help="бюджет статического момента по оси: l1 — сумма |s_i| "
+                        "(по умолчанию), linf — max |s_i|")
+    p.add_argument("--group2-sweep", action="store_true",
+                   help="посчитать p = 0, 10, ..., 100 и сохранить в --out "
+                        "group2_tradeoff.png и group2_tradeoff.csv")
     p.add_argument("--no-plots", action="store_true", help="только расчёт, без графиков")
     p.add_argument("--verify", action="store_true",
                    help="проверить глобальность оптимума (двойственность + ККТ)")
@@ -70,14 +94,49 @@ def _convergence_plots(res, constraints, out: Path) -> None:
                          save_path=out / f"convergence_{axis}.png", show=False)
 
 
+def _group2_sweep(res, out: Path, norm: str, plots: bool = True) -> None:
+    """p = 0, 10, ..., 100: таблица group2_tradeoff.csv и график group2_tradeoff.png."""
+    rows = group2_sweep(res)
+    out.mkdir(parents=True, exist_ok=True)
+    keys = ["group2_percent", "max_moment_x", "max_moment_y",
+            "static_moment_x", "static_moment_y"]
+    header = ["group2_percent", "max_abs_Mx_N_m", "max_abs_My_N_m",
+              f"static_moment_x_{norm}_kg_m", f"static_moment_y_{norm}_kg_m"]
+    with open(out / "group2_tradeoff.csv", "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(header)
+        for r in rows:
+            writer.writerow([f"{r[k]:.9g}" for k in keys])
+    print("\nГруппа 2, %   max|Mx|, Н·м   max|My|, Н·м   B_x, кг·м   B_y, кг·м")
+    for r in rows:
+        print(f"{r['group2_percent']:>12g} {r['max_moment_x']:>14.4f} "
+              f"{r['max_moment_y']:>14.4f} {r['static_moment_x']:>11.6f} "
+              f"{r['static_moment_y']:>11.6f}")
+    if plots:
+        import matplotlib
+        matplotlib.use("Agg")
+        from .plotting import plot_group2_tradeoff
+        plot_group2_tradeoff(rows, norm=norm, save_path=out / "group2_tradeoff.png",
+                             show=False)
+    print(f"Компромисс группы 2 сохранён: {(out / 'group2_tradeoff.csv').resolve()}")
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     engine, components = load_shaft(args.config)
     constraints = load_constraints(args.config)
+    group2_percent = args.group2_percent
+    if group2_percent is None:
+        group2_percent = load_group2_percent(args.config)
     res = analyze(engine, components, step=args.step, constraints=constraints,
-                  counterweight_positions=load_counterweight_positions(args.config))
+                  counterweight_positions=load_counterweight_positions(args.config),
+                  group2_percent=100.0 if group2_percent is None else group2_percent,
+                  norm=args.norm)
 
     print(f"\nmax|Mx| = {res.max_moment_x:.4f} Н·м, max|My| = {res.max_moment_y:.4f} Н·м")
+    print(f"Группа 2: {res.group2_percent:g} %; суммарный статический момент "
+          f"({args.norm}): x = {res.result_x['static_moment_sum']:.6f}, "
+          f"y = {res.result_y['static_moment_sum']:.6f} кг·м")
 
     rows = counterweight_rows(res)
     print("\n" + format_counterweight_table(rows, lang=args.table_lang))
@@ -95,6 +154,10 @@ def main(argv=None) -> int:
             verify_kkt_conditions(r, axis=axis)
             print()
 
+    out = Path(args.out)
+    if args.group2_sweep:
+        _group2_sweep(res, out, args.norm, plots=not args.no_plots)
+
     if args.no_plots:
         return 0
 
@@ -103,7 +166,6 @@ def main(argv=None) -> int:
     from .plotting import (plot_counterweight_table, plot_distribution,
                            plot_moment_3d, plot_sensitivity)
 
-    out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     if not args.csv:
         save_counterweight_csv(rows, out / "counterweights.csv")

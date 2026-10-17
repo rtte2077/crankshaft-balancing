@@ -7,6 +7,9 @@ from .config import EngineConfig
 from .constraints import ALLOWED_KEYS, CounterweightConstraints
 from .geometry import ShaftComponent
 
+# Ключи блока counterweights, которые не являются ограничениями по осям.
+NON_CONSTRAINT_KEYS = {"positions", "group2_percent"}
+
 
 def load_shaft(path: Union[str, Path]) -> Tuple[EngineConfig, List[ShaftComponent]]:
     """Читает JSON вида::
@@ -42,7 +45,8 @@ def load_constraints(path: Union[str, Path]) -> Dict[str, CounterweightConstrain
     (см. ``CounterweightConstraints.from_dict``). Нет блока — пустой словарь.
     """
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    block = {k: v for k, v in data.get("counterweights", {}).items() if k != "positions"}
+    block = {k: v for k, v in data.get("counterweights", {}).items()
+             if k not in NON_CONSTRAINT_KEYS}
     unknown = set(block) - ALLOWED_KEYS
     if unknown:
         raise ValueError(f"В counterweights неизвестные ключи: {sorted(unknown)}. "
@@ -56,3 +60,18 @@ def load_counterweight_positions(path: Union[str, Path]) -> Optional[List[float]
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     positions = data.get("counterweights", {}).get("positions")
     return None if positions is None else [float(x) for x in positions]
+
+
+def load_group2_percent(path: Union[str, Path]) -> Optional[float]:
+    """Необязательный ``counterweights.group2_percent`` — доля группы 2 статических
+    моментов, 0..100. Нет ключа — ``None`` (берётся значение по умолчанию, 100).
+    Значение, переданное в ``analyze()`` или CLI явно, перекрывает JSON."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    value = data.get("counterweights", {}).get("group2_percent")
+    if value is None:
+        return None
+    value = float(value)
+    if not 0.0 <= value <= 100.0:
+        raise ValueError(f"В {path}: counterweights.group2_percent должен быть "
+                         f"в диапазоне 0..100, получено {value}")
+    return value

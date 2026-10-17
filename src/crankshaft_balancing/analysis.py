@@ -1,6 +1,6 @@
 """Сквозной расчёт: геометрия -> силы -> оптимизация противовесов по осям X и Y."""
-from dataclasses import dataclass
-from typing import Mapping, Optional, Sequence
+from dataclasses import dataclass, replace
+from typing import List, Mapping, Optional, Sequence
 
 import numpy as np
 
@@ -40,6 +40,9 @@ class BalanceResult:
     result_x: dict
     result_y: dict
     L_counterweights: np.ndarray   # точки приложения F3 (L от правого конца)
+    constraints: Optional[Mapping[str, CounterweightConstraints]] = None
+    norm: str = "l1"
+    budget_eps: float = 1e-9
 
     @property
     def max_moment_x(self) -> float:
@@ -50,6 +53,10 @@ class BalanceResult:
     def max_moment_y(self) -> float:
         """max|My| после оптимизации, Н·м."""
         return float(np.max(np.abs(self.result_y["M"])) * NMM_TO_NM)
+
+    @property
+    def group2_percent(self) -> float:
+        return self.result_y["group2_percent"]
 
 
 def compute_forces(geometry: CrankshaftGeometry, engine: EngineConfig) -> ShaftForces:
@@ -85,11 +92,31 @@ def raw_moments(Z: np.ndarray, f: ShaftForces) -> tuple:
     return Mx * NMM_TO_NM, My * NMM_TO_NM
 
 
+def _optimize_axes(Z, f: ShaftForces, L3, omega: float,
+                   constraints: Optional[Mapping[str, CounterweightConstraints]],
+                   group2_percent: float, norm: str, budget_eps: float,
+                   verbose: bool, levels: Optional[Mapping[str, dict]] = None) -> dict:
+    """Оптимизация противовесов по осям y и x; ``levels`` — прежние результаты по
+    осям (B_min, B_max, M_opt не пересчитываются)."""
+    n = len(L3)
+    results = {}
+    for axis, Fc, Fp in (("y", f.Fy_cheeks, f.Fy_crankpins),
+                         ("x", f.Fx_cheeks, f.Fx_crankpins)):
+        s_init, s_fixed, s_bounds = resolve_constraints(constraints, axis).to_solver_args(n)
+        results[axis] = optimize_counterweights(
+            Z, f.L_cheeks, Fc, f.L_crankpins, Fp, omega,
+            s_init, s_fixed=s_fixed, L3=L3, s_bounds=s_bounds, axis=axis,
+            verbose=verbose, group2_percent=group2_percent, norm=norm,
+            budget_eps=budget_eps, levels=None if levels is None else levels[axis])
+    return results
+
+
 def analyze(engine: EngineConfig, components: Sequence[ShaftComponent],
             step: float = 0.01, verbose: bool = True,
             constraints: Optional[Mapping[str, CounterweightConstraints]] = None,
-            counterweight_positions: Optional[Sequence[float]] = None
-            ) -> BalanceResult:
+            counterweight_positions: Optional[Sequence[float]] = None,
+            group2_percent: float = 100.0, norm: str = "l1",
+            budget_eps: float = 1e-9) -> BalanceResult:
     """Полный расчёт балансировки для заданных параметров и элементов вала.
 
     ``engine.crankshaft_length`` заполняется автоматически из геометрии.
@@ -100,6 +127,10 @@ def analyze(engine: EngineConfig, components: Sequence[ShaftComponent],
     ``counterweight_positions`` — координаты x (мм, как у элементов вала), где стоят
     противовесы; по умолчанию противовесы стоят на щёках. Если заданы, номер
     противовеса — номер позиции в этом списке (после сортировки по возрастанию).
+    ``group2_percent`` — доля группы 2 статических моментов, 0..100 (100 — минимальный
+    max|M|, 0 — минимальный суммарный статический момент); ``norm`` — ``"l1"``
+    (бюджет ``sum|s|``) или ``"linf"`` (``max|s|``); бюджет считается по каждой оси
+    отдельно. См. ``optimize_counterweights``.
     """
     geometry = build_geometry(components)
     engine.crankshaft_length, module_width = derive_crankshaft_dimensions(geometry, engine)
@@ -126,18 +157,39 @@ def analyze(engine: EngineConfig, components: Sequence[ShaftComponent],
         if verbose:
             print("Позиции противовесов (номер: x, мм): "
                   + ", ".join(f"{i}: x={x:.3f}" for i, x in enumerate(xs)))
-    n = len(L3)
-
-    results = {}
-    for axis, Fc, Fp in (("y", f.Fy_cheeks, f.Fy_crankpins),
-                         ("x", f.Fx_cheeks, f.Fx_crankpins)):
-        s_init, s_fixed, s_bounds = resolve_constraints(constraints, axis).to_solver_args(n)
-        results[axis] = optimize_counterweights(
-            Z, f.L_cheeks, Fc, f.L_crankpins, Fp, engine.angular_speed,
-            s_init, s_fixed=s_fixed, L3=L3, s_bounds=s_bounds, axis=axis,
-            verbose=verbose)
+    results = _optimize_axes(Z, f, L3, engine.angular_speed, constraints,
+                             group2_percent, norm, budget_eps, verbose)
 
     return BalanceResult(engine=engine, geometry=geometry, Z=Z, forces=f,
                          module_width=module_width,
                          result_x=results["x"], result_y=results["y"],
-                         L_counterweights=np.asarray(L3, dtype=float))
+                         L_counterweights=np.asarray(L3, dtype=float),
+                         constraints=constraints, norm=norm, budget_eps=budget_eps)
+
+
+def with_group2_percent(result: BalanceResult, group2_percent: float,
+                        verbose: bool = False) -> BalanceResult:
+    """Тот же расчёт с другим ``group2_percent``. B_min, B_max и M_opt берутся из
+    ``result`` (они от p не зависят), решается только задача шага 4."""
+    results = _optimize_axes(result.Z, result.forces, result.L_counterweights,
+                             result.engine.angular_speed, result.constraints,
+                             group2_percent, result.norm, result.budget_eps, verbose,
+                             levels={"x": result.result_x, "y": result.result_y})
+    return replace(result, result_x=results["x"], result_y=results["y"])
+
+
+def group2_sweep(result: BalanceResult,
+                 percents: Sequence[float] = tuple(range(0, 101, 10))) -> List[dict]:
+    """max|M| и суммарный статический момент по осям для каждого p из ``percents``.
+
+    Строки: ``group2_percent``, ``max_moment_x``/``max_moment_y`` (Н·м),
+    ``static_moment_x``/``static_moment_y`` (кг·м).
+    """
+    rows = []
+    for p in percents:
+        r = with_group2_percent(result, p)
+        rows.append({"group2_percent": float(p),
+                     "max_moment_x": r.max_moment_x, "max_moment_y": r.max_moment_y,
+                     "static_moment_x": r.result_x["static_moment_sum"],
+                     "static_moment_y": r.result_y["static_moment_sum"]})
+    return rows
