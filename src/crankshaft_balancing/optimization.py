@@ -60,9 +60,14 @@ def make_initial_coefficients(n: int, default: float = 1.0,
 class CounterweightLP:
     """Матрицы ЛП для подбора противовесов + служебные данные.
 
-    Переменные ЛП: [s_free (n_free штук), u (n_u штук), t]. ``u`` есть только в
+    Переменные ЛП: [s_free (n_free штук), u (n_u штук), t']. ``u`` есть только в
     задачах с бюджетом статического момента: ``n_free`` переменных при
     ``norm="l1"`` (u_i >= |s_i|) или одна при ``norm="linf"`` (u >= |s_i| для всех i).
+
+    Для обусловленности строки эпюры поделены на ``omega**2``, а вместо
+    ``t`` (Н·мм) переменная ``t' = t / omega**2``; коэффициент цели при ней —
+    ``omega**2``, так что значение цели ``min t`` по-прежнему равно max|M| в Н·мм.
+    Само ``t`` — ``t_value(x)``.
     """
 
     A_ub: np.ndarray
@@ -91,6 +96,15 @@ class CounterweightLP:
     @property
     def t_idx(self) -> int:
         return self.n_free + self.n_u
+
+    @property
+    def t_scale(self) -> float:
+        """t = t_scale * t' (Н·мм)."""
+        return self.omega ** 2
+
+    def t_value(self, x: np.ndarray) -> float:
+        """max|M| (Н·мм) из решения ЛП."""
+        return float(x[self.t_idx] * self.t_scale)
 
     def assemble_solution(self, x: np.ndarray) -> np.ndarray:
         """Полный вектор s (с зафиксированными значениями) из решения ЛП."""
@@ -167,27 +181,30 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
     fixed_F3 = np.where(s_fixed, s_const_vals, 0.0) * omega ** 2
     M_fixed = total_distribution(z, L1, F1, L2, F2, F3=fixed_F3, L3=L3_use)
 
-    # H_free[k, j] = H(z_k - L3[free_idx[j]]) * omega^2  -> (n_z, n_free)
-    H_free = heaviside_ramp(z[:, None] - L3_use[None, free_idx]) * omega ** 2
+    # Строки эпюры делятся на omega^2 (t' = t / omega^2), иначе
+    # коэффициенты при s ~ omega^2 * z ~ 1e7 против 1 при t — плохая обусловленность.
+    w2 = omega ** 2
+    # G[k, j] = H(z_k - L3[free_idx[j]])  -> (n_z, n_free);  M = w2 * (G s + M_fixed / w2)
+    G = heaviside_ramp(z[:, None] - L3_use[None, free_idx])
 
     n_u = (n_free if norm == "l1" else 1) if budget_vars and n_free else 0
     n_vars = n_free + n_u + 1
     t_idx = n_free + n_u
     c = np.zeros(n_vars)
     if objective == "t":
-        c[t_idx] = 1.0
+        c[t_idx] = w2
     else:
         c[n_free:t_idx] = 1.0
 
     rows, rhs = [], []
     if moment_rows:
-        # |M(z_k)| <= t  <=>  M - t <= 0  и  -M - t <= 0
+        # |M(z_k)| <= t  <=>  (M - t) / w2 <= 0  и  (-M - t) / w2 <= 0
         block = np.zeros((2 * n_z, n_vars))
-        block[0:n_z, 0:n_free] = H_free
-        block[n_z:, 0:n_free] = -H_free
+        block[0:n_z, 0:n_free] = G
+        block[n_z:, 0:n_free] = -G
         block[:, t_idx] = -1.0
         rows.append(block)
-        rhs.append(np.concatenate([-M_fixed, M_fixed]))
+        rhs.append(np.concatenate([-M_fixed, M_fixed]) / w2)
 
     fixed_abs = np.abs(s_const_vals[[i for i in range(n) if s_fixed[i]]])
     budget_const = static_moment(fixed_abs, norm)
@@ -214,14 +231,16 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
     # Баланс сил и нулевой суммарный внешний момент
     A_eq = np.zeros((2, n_vars))
     b_eq = np.zeros(2)
-    A_eq[0, 0:n_free] = omega ** 2
+    # (в исходных единицах Н и Н·мм: допуск решателя на равенства — абсолютный)
+    A_eq[0, 0:n_free] = w2
     b_eq[0] = -(np.sum(F1) + np.sum(F2) + np.sum(fixed_F3))
-    A_eq[1, 0:n_free] = H_free[-1, :]
+    A_eq[1, 0:n_free] = G[-1, :] * w2
     b_eq[1] = -M_fixed[-1]
 
     var_bounds = ([(None, None)] * n_free if s_bounds is None
                   else [tuple(s_bounds[i]) for i in free_idx])
-    bounds = var_bounds + [(0, None)] * n_u + [(0, t_max)]  # u >= 0, 0 <= t <= t_max
+    t_max_scaled = None if t_max is None else t_max / w2
+    bounds = var_bounds + [(0, None)] * n_u + [(0, t_max_scaled)]  # u >= 0, 0 <= t <= t_max
 
     return CounterweightLP(A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, c=c,
                            bounds=bounds, free_idx=free_idx, L3=L3_use,
@@ -278,7 +297,7 @@ def minimal_moment_budget(z, L1, F1, L2, F2, omega, s_init, s_fixed=None,
     if lp.n_free == 0:
         s = lp.s_const_vals.copy()
         return s, static_moment(s, norm), float(np.max(np.abs(lp.M_fixed)))
-    M_opt = float(_solve(lp, axis).x[lp.t_idx])
+    M_opt = lp.t_value(_solve(lp, axis).x)
 
     lp3 = build_counterweight_lp(z, L1, F1, L2, F2, omega, s_init, **common,
                                  budget_vars=True, norm=norm, objective="budget",
