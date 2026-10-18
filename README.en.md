@@ -48,13 +48,13 @@ crankpins (F2), purple — the counterweights found (F3).*
 - [Describing your own shaft](#describing-your-own-shaft)
 - [Counterweight constraints](#counterweight-constraints)
 - [Two groups of static moments](#two-groups-of-static-moments)
+- [How the final static moments are chosen](#how-the-final-static-moments-are-chosen)
 - [Coordinate system and units](#coordinate-system-and-units)
 - [Table of counterweight static moments](#table-of-counterweight-static-moments)
 - [Reading the results](#reading-the-results)
 - [Using the library from Python](#using-the-library-from-python)
 - [Verifying global optimality](#verifying-global-optimality)
 - [API reference](#api-reference)
-- [Relation to the original notebook](#relation-to-the-original-notebook)
 - [Repository layout](#repository-layout)
 - [Tests](#tests)
 - [Limitations](#limitations)
@@ -246,7 +246,7 @@ Command-line options:
 | `--group2-sweep` | compute `p` = 0, 10, …, 100 and save `group2_tradeoff.png` and `group2_tradeoff.csv` |
 | `--no-plots` | calculation only, no plots or files (the table is still printed) |
 | `--sensitivity` | save sensitivity plots of `max|M|` to each coefficient `s_i` |
-| `--convergence` | save convergence plots of the simplex method (coarse 2 mm grid; requires a SciPy that still has `linprog(method='simplex')`; for the x axis bounds of ±5 are set, as in the original notebook) |
+| `--convergence` | save convergence plots of the simplex method (coarse 2 mm grid; requires a SciPy that still has `linprog(method='simplex')`; for the x axis bounds of ±5 are set) |
 | `--interactive` | additionally save an interactive 3D plot `moment_3d.html` (requires plotly) |
 
 Files written to `--out`:
@@ -429,8 +429,7 @@ different value in `"y"`, `"y"` wins for the y axis.
 | `fixed` | `{"3": 0.2}` | the coefficient is set by hand and does not change; its value takes part in the force and moment equilibrium |
 | `bounds` | `{"0": [-0.15, 0.15]}` | the coefficient is optimized but stays within `[min, max]`; `null` may replace a bound (no limit on that side) |
 
-In `fixed` the string `"F"` may be used instead of a number — it means `0` (the notation
-of the original notebook). `fixed` and `bounds` cannot be given for the same crank web
+In `fixed` the string `"F"` may be used instead of a number — it means `0`. `fixed` and `bounds` cannot be given for the same crank web
 at the same time (`ValueError`).
 
 > **Note on the axes.** A coefficient belongs to one axis — it is a projection of the
@@ -458,7 +457,7 @@ print(res.result_y["s"])
 The class can also be built from a dictionary of the same form as in the JSON
 (`CounterweightConstraints.from_dict(...)`, supports `zero`, `fixed`, `bounds`).
 
-### Method 3. Low-level call (as in the original notebook)
+### Method 3. Low-level call
 
 When full control is needed, call `optimize_counterweights` directly:
 
@@ -649,6 +648,64 @@ magnitudes); the CSV gets the components `s1_x_kg_m`, `s1_y_kg_m`, `s2_x_kg_m`,
 - If $B_{\max} = B_{\min}$, all `p` give the same solution; this is reported in the output.
 - If all coefficients are fixed, no optimization is run and `group2_percent` is ignored:
   `s_group1 = s`, `s_group2 = 0`.
+
+## How the final static moments are chosen
+
+The final static moments of the counterweights `s` are obtained by a chain of linear
+programs. Each next problem chooses only among the best solutions of the previous one,
+so a more important criterion is never worsened for the sake of a less important one.
+Everything is computed **for each axis separately** (calculation axes x and y), and then
+the components `s_x`, `s_y` are combined into the table.
+
+**Always satisfied** (in every step below):
+
+- force equilibrium $\sum F_1 + \sum F_2 + \sum F_3 = 0$;
+- zero resultant external moment $M(z_{\text{end}}) = 0$;
+- the constraints from `counterweights`: `zero`/`fixed` (the coefficient is given and
+  not optimized), `bounds` (range), `positions` (where the counterweights are).
+
+**Steps** (for each axis):
+
+| Step | Problem | Result |
+|---|---|---|
+| 1 | $\min \sum\|s_i\|$ | $B_{\min}$ — the smallest total static moment that balances the shaft; this solution is group 1 (`s_group1`) |
+| 2 | $\min \max\|M\|$ | $M_{opt}$ — the smallest possible peak of the diagram |
+| 3 | $\min (\max M - \min M)$ subject to $\max\|M\| = M_{opt}$ | $R_{opt}$ — the smallest range of the diagram among the solutions with the smallest peak |
+| 4 | $\min \sum\|s_i\|$ subject to $\max\|M\| = M_{opt}$ and range $R_{opt}$ | $B_{\max}$ — the lightest of those solutions |
+| 5 | $\min \max\|M\|$ subject to $\sum\|s_i\| \le B(p)$ | $T(p)$ — the smallest peak within the budget $B(p) = B_{\min} + \tfrac{p}{100}(B_{\max} - B_{\min})$ |
+| 6 | $\min (\max M - \min M)$ subject to $\max\|M\| = T(p)$ and $\sum\|s_i\| \le B(p)$ | **the final `s`** |
+
+Order of importance of the criteria: first the **peak** `max|M|`, then the **range** of
+the diagram `max M − min M`, then the **mass** of the counterweights $\sum|s_i|$. With
+`p = 100` (default) the result is the solution with the smallest peak, among those the
+one with the smallest range, and among those the lightest. With `p < 100` the total
+static moment is limited by $B(p)$, and within that budget the same order "peak, then
+range" applies.
+
+The equalities in steps 3–6 ("subject to $\max|M| = M_{opt}$" etc.) hold with the
+relative tolerance `budget_eps` = $10^{-9}$, so that the solver is not stopped by
+round-off.
+
+**After the calculation:**
+
+- `s_group2 = s − s_group1` — a breakdown for the report (see
+  [Two groups of static moments](#two-groups-of-static-moments));
+- values below $10^{-9}$ of the maximum are zeroed as numerical noise;
+- the axis components are combined into the magnitude $|s| = \sqrt{s_x^2 + s_y^2}$ and
+  the angle from the z axis — these are the rows of the
+  [counterweight table](#table-of-counterweight-static-moments);
+- the counterweight mass is obtained by dividing by the radius of its centre of mass:
+  $m = |s| / r$ (see [Converting `s` to a counterweight mass](#converting-s-to-a-counterweight-mass)).
+
+**Example** (`examples/example_shaft.json`, y axis, `p = 100`): $B_{\min} = 0$ (the
+shaft is balanced by itself), $M_{opt} = 135.51$ N·m, $R_{opt} = 271.03$ N·m,
+$B_{\max} = 1.3653$ kg·m. The final `s_y`: −0.1178, −0.2235, +0.1549, +0.1864, +0.1864,
++0.1549, −0.2235, −0.1178 kg·m — a symmetric set with the sum 1.3653 kg·m.
+
+Global optimality of the final result is verified on the last problem (step 6) with the
+dual certificate and the KKT conditions (`--verify`). If several equivalent solutions
+remain after all the steps, the solver returns one of them; this does not affect
+`max|M|`, the range or the sum of `|s|`.
 
 ## Coordinate system and units
 
@@ -903,36 +960,6 @@ Everything below is importable directly from `crankshaft_balancing`, except the 
 | `plotting.plot_group2_tradeoff(rows, norm)` | `max|M|` and the static moment versus the share of group 2 |
 
 Every function has a docstring (in Russian) describing its parameters: `help(optimize_counterweights)`.
-
-## Relation to the original notebook
-
-The package reproduces all the functionality of the original notebook and extends it.
-Nothing of the original calculation has been removed.
-
-| Notebook section | Where in the package |
-|---|---|
-| 1. `EngineConfig`, `ShaftComponent`, `build_geometry`, input-order check, shaft length derivation | `config.py`, `geometry.py` (`derive_crankshaft_dimensions`); the order check is in `tests/test_geometry.py` and `notebooks/demo.ipynb` |
-| 2–3. Section grid, distances, centrifugal forces | `sections.py` (`section_grid`), `forces.py` |
-| 4. Method of sections `total_distribution`, `NMM_TO_NM` | `sections.py` |
-| 5. `plot_distribution`, diagrams before optimization | `plotting.py`; the CLI saves `moment_*_raw.png` |
-| 6. `make_initial_coefficients`, `optimize_counterweights` (`s_init`, `s_fixed`, `s_bounds`, `L3`, `axis`, `verbose`) | `optimization.py`, all parameters preserved |
-| 7. `plot_moment_3d` (static and interactive plotly) | `plotting.py`; CLI: `moment_3d.png`, `--interactive` |
-| 8. `optimize_counterweights_history`, `plot_convergence` (y axis and x axis with bounds ±5) | `optimization.py`, `plotting.py`; CLI: `--convergence`; the x axis — `notebooks/demo.ipynb` and CLI |
-| 9. `verify_optimum_via_duality`, `verify_kkt_conditions`, `sweep_sensitivity`, `plot_sensitivity` (y and x axes) | `verification.py`, `plotting.py`; CLI: `--verify`, `--sensitivity` |
-
-**Added compared with the notebook:**
-
-- counterweight constraints in the JSON and in `analyze()` (`zero`, `fixed`, `bounds`, axes `x`/`y`/`all`) with validation of numbers and bounds;
-- custom counterweight positions via `counterweight_positions`;
-- a table of counterweight static moments: components, resultant magnitude, phase angle from the z axis (console, picture and CSV);
-- a calculation with all coefficients fixed (in the notebook such a call crashed: nothing for the solver to optimize);
-- a single assembly of the LP matrices (`build_counterweight_lp`) instead of three copies of the code;
-- reading the shaft from JSON, the `crankbalance` command, saving the plots to files, tests, CI.
-
-Difference in signatures: `verify_optimum_via_duality`, `verify_kkt_conditions` and
-`sweep_sensitivity` take the problem matrices straight from the optimization result
-(`result["lp"]`), so a separate `lp` need not be passed (it still can be: the `lp=`
-parameter is kept).
 
 ## Repository layout
 
