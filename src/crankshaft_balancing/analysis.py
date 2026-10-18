@@ -58,6 +58,16 @@ class BalanceResult:
     def group2_percent(self) -> float:
         return self.result_y["group2_percent"]
 
+    @property
+    def moment_range_x(self) -> float:
+        """Размах эпюры max Mx - min Mx, Н·м."""
+        return float(self.result_x["moment_range"] * NMM_TO_NM)
+
+    @property
+    def moment_range_y(self) -> float:
+        """Размах эпюры max My - min My, Н·м."""
+        return float(self.result_y["moment_range"] * NMM_TO_NM)
+
 
 def compute_forces(geometry: CrankshaftGeometry, engine: EngineConfig) -> ShaftForces:
     """Центробежные силы щёк и шатунных шеек и их проекции на оси."""

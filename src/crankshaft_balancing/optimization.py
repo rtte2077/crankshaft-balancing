@@ -20,10 +20,15 @@
 1. ``B_min`` — минимальный бюджет, при котором выполняются два равенства
    (эпюра M не ограничивается) — ``minimal_static_moment``;
 2. ``M_opt`` — минимально возможный ``max|M|`` (исходная задача);
-3. ``B_max`` — минимальный бюджет при ``max|M| <= M_opt`` (с допуском
-   ``budget_eps``) — ``minimal_moment_budget``;
+3. ``B_max`` — минимальный бюджет среди решений с ``max|M| <= M_opt`` и наименьшим
+   при этом размахом эпюры (с допуском ``budget_eps``) — ``minimal_moment_budget``;
 4. для процента ``p``: ``min t`` при бюджете
-   ``B(p) = B_min + p/100 * (B_max - B_min)`` — ``optimize_counterweights``.
+   ``B(p) = B_min + p/100 * (B_max - B_min)`` — ``optimize_counterweights``;
+5. среди решений шага 4 (тот же max|M|, тот же бюджет) — наименьший размах эпюры
+   ``max M - min M``.
+
+Оптимум по max|M| обычно неединственный; шаги 3 и 5 выбирают из равноценных по
+max|M| решений: сначала с наименьшим размахом эпюры, затем самое лёгкое.
 
 Бюджет считается по каждой оси отдельно: минимизируются ``sum|s_x|`` и ``sum|s_y|``
 по отдельности, а не ``sum sqrt(s_x^2 + s_y^2)`` — последнее связало бы оси и
@@ -60,9 +65,11 @@ def make_initial_coefficients(n: int, default: float = 1.0,
 class CounterweightLP:
     """Матрицы ЛП для подбора противовесов + служебные данные.
 
-    Переменные ЛП: [s_free (n_free штук), u (n_u штук), t']. ``u`` есть только в
-    задачах с бюджетом статического момента: ``n_free`` переменных при
+    Переменные ЛП: [s_free (n_free штук), u (n_u штук), t', (hi', lo')]. ``u`` есть
+    только в задачах с бюджетом статического момента: ``n_free`` переменных при
     ``norm="l1"`` (u_i >= |s_i|) или одна при ``norm="linf"`` (u >= |s_i| для всех i).
+    ``hi'``, ``lo'`` — только в задачах с размахом эпюры: ``lo <= M(z_k) <= hi``,
+    размах ``hi - lo`` (в тех же единицах ``/ omega**2``, что и ``t'``).
 
     Для обусловленности строки эпюры поделены на ``omega**2``, а вместо
     ``t`` (Н·мм) переменная ``t' = t / omega**2``; коэффициент цели при ней —
@@ -84,6 +91,7 @@ class CounterweightLP:
     n_u: int = 0
     norm: str = "l1"
     budget_const: float = 0.0   # вклад зафиксированных s в бюджет (константа)
+    has_range: bool = False     # есть ли переменные hi', lo' (размах эпюры)
 
     @property
     def n_free(self) -> int:
@@ -105,6 +113,12 @@ class CounterweightLP:
     def t_value(self, x: np.ndarray) -> float:
         """max|M| (Н·мм) из решения ЛП."""
         return float(x[self.t_idx] * self.t_scale)
+
+    def range_value(self, x: np.ndarray) -> float:
+        """Размах эпюры hi - lo (Н·мм) из решения ЛП."""
+        if not self.has_range:
+            raise ValueError("В этой ЛП нет переменных размаха")
+        return float((x[self.t_idx + 1] - x[self.t_idx + 2]) * self.t_scale)
 
     def assemble_solution(self, x: np.ndarray) -> np.ndarray:
         """Полный вектор s (с зафиксированными значениями) из решения ЛП."""
@@ -131,6 +145,22 @@ def _check_norm(norm: str) -> None:
         raise ValueError(f"Неизвестная норма {norm!r}; допустимы: {NORMS}")
 
 
+def _critical_rows(z: np.ndarray, *points) -> np.ndarray:
+    """Номера сечений сетки ``z``, где достаточно проверять ограничения на M(z).
+
+    M(z) линейна между соседними точками приложения сил (и концами вала), поэтому
+    на каждом таком участке экстремумы M по узлам сетки — в крайних узлах участка.
+    Остаются: первый и последний узлы сетки и узлы, ближайшие слева и справа к
+    каждой точке приложения силы. Ограничения ``|M| <= t`` и ``lo <= M <= hi`` в
+    этих узлах равносильны ограничениям во всех узлах сетки.
+    """
+    nodes = np.unique(np.concatenate([np.asarray(p, dtype=float).ravel() for p in points]))
+    right = np.searchsorted(z, nodes, side="left")          # первый z_k >= узла
+    left = np.searchsorted(z, nodes, side="right") - 1      # последний z_k <= узла
+    idx = np.concatenate([[0, len(z) - 1], left, right])
+    return np.unique(idx[(idx >= 0) & (idx < len(z))])
+
+
 def build_counterweight_lp(z, L1, F1, L2, F2, omega,
                            s_init: Sequence[Union[float, str]],
                            s_fixed: Optional[Sequence[bool]] = None,
@@ -138,7 +168,8 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
                            budget_vars: bool = False, norm: str = "l1",
                            objective: str = "t", budget: Optional[float] = None,
                            t_max: Optional[float] = None,
-                           moment_rows: bool = True) -> CounterweightLP:
+                           moment_rows: bool = True, range_vars: bool = False,
+                           range_max: Optional[float] = None) -> CounterweightLP:
     """Строит ЛП для подбора коэффициентов противовесов (см. docstring модуля).
 
     Без дополнительных аргументов — исходная задача ``min t``. Остальное нужно
@@ -150,19 +181,27 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
     budget      — верхняя граница бюджета ``B`` (с учётом зафиксированных s);
     t_max       — верхняя граница ``t``, т.е. ``max|M| <= t_max`` (Н·мм);
     moment_rows — включать ли строки ``-t <= M(z_k) <= t`` (для шага 1 не нужны).
+
+    Размах эпюры ``max M - min M``:
+
+    range_vars  — добавить переменные ``hi``, ``lo`` и строки ``lo <= M(z_k) <= hi``;
+    objective   — ``"range"``: минимизировать размах ``hi - lo``;
+    range_max   — верхняя граница размаха ``hi - lo`` (Н·мм).
     """
     _check_norm(norm)
-    if objective not in ("t", "budget"):
-        raise ValueError(f"Неизвестная цель {objective!r}; допустимы: 't', 'budget'")
+    if objective not in ("t", "budget", "range"):
+        raise ValueError(f"Неизвестная цель {objective!r}; допустимы: 't', 'budget', "
+                         f"'range'")
     if (objective == "budget" or budget is not None) and not budget_vars:
         raise ValueError("Бюджет требует budget_vars=True")
+    if (objective == "range" or range_max is not None) and not range_vars:
+        raise ValueError("Размах эпюры требует range_vars=True")
 
     z = np.asarray(z, dtype=float)
     s_init = list(s_init)
 
     L3_use = np.asarray(L1 if L3 is None else L3, dtype=float)
     n = len(L3_use)
-    n_z = len(z)
 
     s_fixed = [False] * n if s_fixed is None else list(s_fixed)
     for i in range(n):
@@ -188,23 +227,46 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
     G = heaviside_ramp(z[:, None] - L3_use[None, free_idx])
 
     n_u = (n_free if norm == "l1" else 1) if budget_vars and n_free else 0
-    n_vars = n_free + n_u + 1
     t_idx = n_free + n_u
+    hi_idx, lo_idx = t_idx + 1, t_idx + 2      # только при range_vars
+    n_vars = t_idx + 1 + (2 if range_vars else 0)
     c = np.zeros(n_vars)
     if objective == "t":
         c[t_idx] = w2
-    else:
+    elif objective == "budget":
         c[n_free:t_idx] = 1.0
+    else:
+        c[hi_idx], c[lo_idx] = w2, -w2
+
+    # Строки по эпюре — только в сечениях, где M может достигать экстремума
+    # (см. _critical_rows): ЛП та же, что по всей сетке, но в сотни раз меньше.
+    k = _critical_rows(z, L1, L2, L3_use)
+    Gk, Mk, n_k = G[k], M_fixed[k], len(k)
 
     rows, rhs = [], []
     if moment_rows:
         # |M(z_k)| <= t  <=>  (M - t) / w2 <= 0  и  (-M - t) / w2 <= 0
-        block = np.zeros((2 * n_z, n_vars))
-        block[0:n_z, 0:n_free] = G
-        block[n_z:, 0:n_free] = -G
+        block = np.zeros((2 * n_k, n_vars))
+        block[0:n_k, 0:n_free] = Gk
+        block[n_k:, 0:n_free] = -Gk
         block[:, t_idx] = -1.0
         rows.append(block)
-        rhs.append(np.concatenate([-M_fixed, M_fixed]) / w2)
+        rhs.append(np.concatenate([-Mk, Mk]) / w2)
+
+    if range_vars:
+        # M(z_k) <= hi  и  lo <= M(z_k)  (поделено на w2, как строки |M| <= t)
+        block = np.zeros((2 * n_k, n_vars))
+        block[0:n_k, 0:n_free] = Gk
+        block[0:n_k, hi_idx] = -1.0
+        block[n_k:, 0:n_free] = -Gk
+        block[n_k:, lo_idx] = 1.0
+        rows.append(block)
+        rhs.append(np.concatenate([-Mk, Mk]) / w2)
+        if range_max is not None:
+            row = np.zeros((1, n_vars))
+            row[0, hi_idx], row[0, lo_idx] = 1.0, -1.0
+            rows.append(row)
+            rhs.append(np.array([range_max / w2]))
 
     fixed_abs = np.abs(s_const_vals[[i for i in range(n) if s_fixed[i]]])
     budget_const = static_moment(fixed_abs, norm)
@@ -241,17 +303,26 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
                   else [tuple(s_bounds[i]) for i in free_idx])
     t_max_scaled = None if t_max is None else t_max / w2
     bounds = var_bounds + [(0, None)] * n_u + [(0, t_max_scaled)]  # u >= 0, 0 <= t <= t_max
+    if range_vars:
+        bounds += [(None, None), (None, None)]                       # hi, lo свободны
 
     return CounterweightLP(A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, c=c,
                            bounds=bounds, free_idx=free_idx, L3=L3_use,
                            s_const_vals=s_const_vals, M_fixed=M_fixed, omega=omega,
-                           n_u=n_u, norm=norm, budget_const=budget_const)
+                           n_u=n_u, norm=norm, budget_const=budget_const,
+                           has_range=range_vars)
 
 
 def _solve(lp: CounterweightLP, axis: str, what: str = ""):
     """linprog/HiGHS по матрицам ``lp``; RuntimeError, если решения нет."""
-    res = linprog(lp.c, A_ub=lp.A_ub, b_ub=lp.b_ub, A_eq=lp.A_eq, b_eq=lp.b_eq,
+    kwargs = dict(A_ub=lp.A_ub, b_ub=lp.b_ub, A_eq=lp.A_eq, b_eq=lp.b_eq,
                   bounds=lp.bounds, method="highs")
+    res = linprog(lp.c, **kwargs)
+    if res.x is None and res.status == 4:
+        # «численные трудности»: presolve старых HiGHS (SciPy <= 1.13) иногда не
+        # справляется с почти вырожденными ограничениями шагов выбора из равноценных
+        # решений; без presolve та же задача решается.
+        res = linprog(lp.c, **kwargs, options={"presolve": False})
     if res.x is None:
         raise RuntimeError(f"[{axis}] решатель не нашёл решения: {res.message}{what}")
     return res
@@ -286,8 +357,9 @@ def minimal_moment_budget(z, L1, F1, L2, F2, omega, s_init, s_fixed=None,
                           L3=None, s_bounds=None, norm: str = "l1",
                           budget_eps: float = 1e-9,
                           axis: str = "x") -> Tuple[np.ndarray, float, float]:
-    """Шаги 2-3: ``M_opt`` — минимально возможный max|M| (Н·мм), затем ``B_max`` —
-    минимальный бюджет среди решений с ``max|M| <= M_opt + допуск``.
+    """Шаги 2-3: ``M_opt`` — минимально возможный max|M| (Н·мм); затем среди решений с
+    ``max|M| <= M_opt + допуск`` — наименьший размах эпюры ``R_opt``, и ``B_max`` —
+    минимальный бюджет среди решений с ``max|M| <= M_opt`` и размахом ``R_opt``.
 
     Допуск ``budget_eps`` относительный (абсолютный, в Н·мм, при ``M_opt < 1``).
     Возвращает ``(s, B_max, M_opt)``.
@@ -299,9 +371,14 @@ def minimal_moment_budget(z, L1, F1, L2, F2, omega, s_init, s_fixed=None,
         return s, static_moment(s, norm), float(np.max(np.abs(lp.M_fixed)))
     M_opt = lp.t_value(_solve(lp, axis).x)
 
+    t_cap = M_opt + _tolerance(M_opt, budget_eps)
+    lp_r = build_counterweight_lp(z, L1, F1, L2, F2, omega, s_init, **common,
+                                  t_max=t_cap, range_vars=True, objective="range")
+    R_opt = lp_r.range_value(_solve(lp_r, axis).x)
     lp3 = build_counterweight_lp(z, L1, F1, L2, F2, omega, s_init, **common,
                                  budget_vars=True, norm=norm, objective="budget",
-                                 t_max=M_opt + _tolerance(M_opt, budget_eps))
+                                 t_max=t_cap, range_vars=True,
+                                 range_max=R_opt + _tolerance(R_opt, budget_eps))
     s = lp3.assemble_solution(_solve(lp3, axis).x)
     return s, static_moment(s, norm), M_opt
 
@@ -344,12 +421,16 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
     Бюджет по каждой оси свой: минимизируется ``sum|s|`` по этой оси, а не
     сумма модулей векторов ``sqrt(s_x^2 + s_y^2)``.
 
-    Возвращает dict: ``s``, ``F3``, ``M`` (Н·мм), ``success``, ``result`` (linprog),
+    Среди решений с минимальным max|M| берётся решение с наименьшим размахом эпюры
+    ``max M - min M`` (при ``group2_percent = 100`` — ещё и самое лёгкое из них).
+
+    Возвращает dict: ``s``, ``F3``, ``M`` (Н·мм), ``success``, ``result`` (linprog;
+    последняя задача — минимум размаха при найденном max|M|),
     ``lp`` (CounterweightLP — нужен для проверок оптимальности), а также
     ``s_group1`` (решение шага 1), ``s_group2 = s - s_group1`` (декомпозиция
     отчёта, а не отдельные грузы), ``static_moment_sum``, ``static_moment_min``
     (B_min), ``static_moment_max`` (B_max), ``group2_percent``, ``max_moment_opt``
-    (M_opt, Н·мм).
+    (M_opt, Н·мм), ``moment_range`` (размах итоговой эпюры, Н·мм).
     """
     if not 0.0 <= float(group2_percent) <= 100.0:
         raise ValueError(f"group2_percent должен быть в диапазоне 0..100, "
@@ -375,7 +456,8 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
                 "s_group1": s.copy(), "s_group2": np.zeros_like(s),
                 "static_moment_sum": B, "static_moment_min": B, "static_moment_max": B,
                 "group2_percent": float(group2_percent),
-                "max_moment_opt": float(np.max(np.abs(lp.M_fixed)))}
+                "max_moment_opt": float(np.max(np.abs(lp.M_fixed))),
+                "moment_range": float(np.ptp(lp.M_fixed))}
 
     args = (z, L1, F1, L2, F2, omega, s_init)
     if levels is None:
@@ -391,8 +473,12 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
     degenerate = B_max - B_min <= _tolerance(B_max, budget_eps)
 
     B_p = B_min + float(group2_percent) / 100.0 * (B_max - B_min)
-    lp = build_counterweight_lp(*args, **common, budget_vars=True, norm=norm,
-                                budget=B_p * (1.0 + budget_eps))
+    budgeted = dict(**common, budget_vars=True, norm=norm, budget=B_p * (1.0 + budget_eps))
+    lp4 = build_counterweight_lp(*args, **budgeted)
+    T_p = lp4.t_value(_solve(lp4, axis).x)
+    # Шаг 5: среди решений с max|M| = T_p (и тем же бюджетом) — наименьший размах.
+    lp = build_counterweight_lp(*args, **budgeted, t_max=T_p + _tolerance(T_p, budget_eps),
+                                range_vars=True, objective="range")
     res = _solve(lp, axis)
 
     s_full = lp.assemble_solution(res.x)
@@ -409,7 +495,8 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
         if degenerate:
             print(f"[{axis}] B_max = B_min: группа 2 пуста, все p дают одно решение")
         print(f"[{axis}] max|M| = {np.max(np.abs(M_res)) * NMM_TO_NM:.4f} Н·м "
-              f"(минимально возможный {M_opt * NMM_TO_NM:.4f} Н·м)")
+              f"(минимально возможный {M_opt * NMM_TO_NM:.4f} Н·м), размах эпюры "
+              f"max M - min M = {np.ptp(M_res) * NMM_TO_NM:.4f} Н·м")
         print(f"[{axis}] s = {np.round(s_full, 4)}")
         print(f"[{axis}] баланс сил = "
               f"{round(np.sum(F1) + np.sum(F2) + np.sum(s_full) * omega ** 2, 6)} Н")
@@ -421,7 +508,8 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
             "s_group1": s_group1, "s_group2": s_group2,
             "static_moment_sum": static_moment(s_full, norm),
             "static_moment_min": float(B_min), "static_moment_max": float(B_max),
-            "group2_percent": float(group2_percent), "max_moment_opt": float(M_opt)}
+            "group2_percent": float(group2_percent), "max_moment_opt": float(M_opt),
+            "moment_range": float(np.ptp(M_res))}
 
 
 def optimize_counterweights_history(z, L1, F1, L2, F2, omega,

@@ -96,3 +96,50 @@ def test_history_converges(result):
         pytest.skip("В этой версии SciPy нет linprog(method='simplex')")
     vals = h["history"]["max_abs_M"]
     assert len(vals) > 1 and vals[-1] <= vals[0]
+
+
+def _plain_min_max(z, L1, F1, L2, F2, w, n, L3, s_bounds):
+    """Произвольное решение исходной задачи min max|M| (без выбора по размаху)."""
+    from scipy.optimize import linprog
+    from crankshaft_balancing import build_counterweight_lp
+    lp = build_counterweight_lp(z, L1, F1, L2, F2, w, [1.0] * n, L3=L3, s_bounds=s_bounds)
+    res = linprog(lp.c, A_ub=lp.A_ub, b_ub=lp.b_ub, A_eq=lp.A_eq, b_eq=lp.b_eq,
+                  bounds=lp.bounds, method="highs")
+    s = lp.assemble_solution(res.x)
+    return total_distribution(z, L1, F1, L2, F2, F3=s * w ** 2, L3=L3)
+
+
+def test_smallest_range_among_min_max_solutions():
+    # синтетический вал, где оптимум по max|M| неединственный и решения различаются
+    # размахом эпюры max M - min M
+    from crankshaft_balancing import section_grid
+    z, w = section_grid(300.0, 1.0), 100.0
+    L1, F1 = [15.6, 32.9, 53.8, 118.0], [679.0, -470.0, -870.0, 77.0]
+    L2, F2 = [16.0, 98.7], [-863.0, 620.0]
+    L3 = np.array([36.0, 47.0, 104.6, 220.9, 279.7])
+    bounds = [(-0.2, 0.2)] * 5
+    r = optimize_counterweights(z, L1, F1, L2, F2, w, [1.0] * 5, L3=L3, s_bounds=bounds,
+                                verbose=False)
+    M_plain = _plain_min_max(z, L1, F1, L2, F2, w, 5, L3, bounds)
+    assert np.max(np.abs(r["M"])) == pytest.approx(np.max(np.abs(M_plain)), rel=1e-7)
+    assert r["moment_range"] == pytest.approx(np.ptp(r["M"]))
+    assert r["moment_range"] < 0.7 * np.ptp(M_plain)      # 9622 -> 5300
+    assert verify_optimum_via_duality(r, verbose=False)["confirmed"]
+    assert verify_kkt_conditions(r, verbose=False)["confirmed"]
+
+
+def test_range_never_worse_than_plain_min_max(result):
+    f, w = result.forces, result.engine.angular_speed
+    M_plain = _plain_min_max(result.Z, f.L_cheeks, f.Fy_cheeks, f.L_crankpins,
+                             f.Fy_crankpins, w, 8, result.L_counterweights, None)
+    assert result.moment_range_y * 1e3 <= np.ptp(M_plain) * (1 + 1e-8)
+    assert result.max_moment_y * 1e3 == pytest.approx(np.max(np.abs(M_plain)), rel=1e-7)
+
+
+def test_reduced_rows_match_full_grid(result):
+    # строки ЛП берутся только в «критических» сечениях; на всей сетке ограничение
+    # |M| <= max|M| из ЛП тоже должно выполняться
+    r = result.result_y
+    t = r["lp"].t_value(r["result"].x)
+    assert np.max(np.abs(r["M"])) <= t * (1 + 1e-7)
+    assert r["lp"].A_ub.shape[0] < len(result.Z) / 10

@@ -133,6 +133,19 @@ The problem is solved with HiGHS (`scipy.optimize.linprog`). Unlike gradient met
 applied to the non-smooth function `max(|...|)`, linear programming guarantees the global
 minimum.
 
+The optimum in `max|M|` is usually not unique: different sets of `s` give the same
+minimal peak. Among them the set with the **smallest range of the diagram**
+$\max M - \min M$ is taken (a second LP: $\min (hi - lo)$ subject to
+$lo \le M(z_k) \le hi$ and $\max|M|$ not above the minimum found), and among those the
+lightest one. The peak does not change. On the examples in the repository all optimal
+solutions have the same range (usually $2\max|M|$: the diagram touches both $+\max$ and
+$-\max$); on shafts with `bounds` constraints the choice by range can nearly halve it.
+
+The constraints on the diagram are checked only at the grid sections next to the points
+where forces are applied: between those points $M(z)$ is linear, so at the other sections
+they hold automatically. This is the same LP but hundreds of times smaller: a calculation
+on a 0.01 mm grid takes a fraction of a second.
+
 This is the default behaviour. The total static moment of the counterweights can be
 limited to get an intermediate option between "minimal moment" and "minimal counterweight
 mass" — see [Two groups of static moments](#two-groups-of-static-moments).
@@ -194,7 +207,7 @@ Equivalent: `python -m crankshaft_balancing examples/example_shaft.json --verify
 Output (abridged; the status lines are in Russian):
 
 ```
-[y] max|M| = 135.5133 Н·м
+[y] max|M| = 135.5133 Н·м (минимально возможный 135.5133 Н·м), размах эпюры max M - min M = 271.0267 Н·м
 [y] баланс сил = -0.0 Н                              (force equilibrium)
 [y] суммарный внешний момент M(z[-1]) = 0.0 Н·м      (resultant external moment)
 ...
@@ -214,9 +227,9 @@ No.     x, mm  s_x (y), kg·m  s_y (z), kg·m  |s|, kg·m angle from z, deg  |s1
 
 > The values of `s` may differ slightly on your machine. The optimum of the problem is not
 > unique (different sets of `s` give the same minimum of `max|M|`). Among them the set with
-> the smallest sum of `|s|` is taken (step 3 in
-> [Two groups of static moments](#two-groups-of-static-moments)), but even that may not be
-> unique. Compare `max|M|`, not individual coefficients.
+> the smallest range of the diagram is taken, and among those the one with the smallest
+> sum of `|s|` (step 3 in [Two groups of static moments](#two-groups-of-static-moments)),
+> but even that may not be unique. Compare `max|M|`, not individual coefficients.
 
 Command-line options:
 
@@ -557,8 +570,9 @@ problems stay linear (HiGHS gives the global optimum):
    `fixed`/`bounds` constraints; the moment diagram is not constrained. This solution is
    stored as `s_group1`.
 2. $M_{opt}$ — the smallest possible $\max|M|$ (the original problem).
-3. $B_{\max}$ — minimum of $\sum u_i$ subject to $\max|M| \le M_{opt}(1+\varepsilon)$:
-   among all solutions with the smallest moment, the "lightest" one is taken
+3. $B_{\max}$ — minimum of $\sum u_i$ subject to $\max|M| \le M_{opt}(1+\varepsilon)$
+   and the smallest range of the diagram at that peak: among all solutions with the
+   smallest moment and the smallest range, the "lightest" one is taken
    ($\varepsilon$ = `budget_eps`, default $10^{-9}$).
 4. For a given `p`:
 
@@ -566,6 +580,8 @@ $$B(p) = B_{\min} + \frac{p}{100}\,(B_{\max} - B_{\min}),$$
 
    and $\min t$ is solved subject to $-t \le M(z_k) \le t$, the two equalities and
    $\sum_i u_i \le B(p)$.
+5. Among the solutions of step 4 (the same $\max|M|$ and budget) the one with the
+   smallest range of the diagram $\max M - \min M$ is taken.
 
 Fixed coefficients (`fixed`, `zero`) enter the budget as constants. A larger `p` gives a
 larger feasible set, so `max|M|` does not increase with `p`. The derivation is in
