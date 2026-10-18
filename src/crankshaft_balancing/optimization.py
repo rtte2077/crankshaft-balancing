@@ -60,9 +60,11 @@ def make_initial_coefficients(n: int, default: float = 1.0,
 class CounterweightLP:
     """Матрицы ЛП для подбора противовесов + служебные данные.
 
-    Переменные ЛП: [s_free (n_free штук), u (n_u штук), t']. ``u`` есть только в
-    задачах с бюджетом статического момента: ``n_free`` переменных при
+    Переменные ЛП: [s_free (n_free штук), u (n_u штук), t', (hi', lo')]. ``u`` есть
+    только в задачах с бюджетом статического момента: ``n_free`` переменных при
     ``norm="l1"`` (u_i >= |s_i|) или одна при ``norm="linf"`` (u >= |s_i| для всех i).
+    ``hi'``, ``lo'`` — только в задачах сглаживания: ``lo <= M(z_k) <= hi``, размах
+    эпюры ``hi - lo`` (в тех же единицах ``/ omega**2``, что и ``t'``).
 
     Для обусловленности строки эпюры поделены на ``omega**2``, а вместо
     ``t`` (Н·мм) переменная ``t' = t / omega**2``; коэффициент цели при ней —
@@ -84,6 +86,7 @@ class CounterweightLP:
     n_u: int = 0
     norm: str = "l1"
     budget_const: float = 0.0   # вклад зафиксированных s в бюджет (константа)
+    has_range: bool = False     # есть ли переменные hi', lo' (размах эпюры)
 
     @property
     def n_free(self) -> int:
@@ -105,6 +108,12 @@ class CounterweightLP:
     def t_value(self, x: np.ndarray) -> float:
         """max|M| (Н·мм) из решения ЛП."""
         return float(x[self.t_idx] * self.t_scale)
+
+    def range_value(self, x: np.ndarray) -> float:
+        """Размах эпюры hi - lo (Н·мм) из решения ЛП."""
+        if not self.has_range:
+            raise ValueError("В этой ЛП нет переменных размаха")
+        return float((x[self.t_idx + 1] - x[self.t_idx + 2]) * self.t_scale)
 
     def assemble_solution(self, x: np.ndarray) -> np.ndarray:
         """Полный вектор s (с зафиксированными значениями) из решения ЛП."""
@@ -138,7 +147,8 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
                            budget_vars: bool = False, norm: str = "l1",
                            objective: str = "t", budget: Optional[float] = None,
                            t_max: Optional[float] = None,
-                           moment_rows: bool = True) -> CounterweightLP:
+                           moment_rows: bool = True, range_vars: bool = False,
+                           range_max: Optional[float] = None) -> CounterweightLP:
     """Строит ЛП для подбора коэффициентов противовесов (см. docstring модуля).
 
     Без дополнительных аргументов — исходная задача ``min t``. Остальное нужно
@@ -150,12 +160,21 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
     budget      — верхняя граница бюджета ``B`` (с учётом зафиксированных s);
     t_max       — верхняя граница ``t``, т.е. ``max|M| <= t_max`` (Н·мм);
     moment_rows — включать ли строки ``-t <= M(z_k) <= t`` (для шага 1 не нужны).
+
+    Сглаживание эпюры (размах ``max M - min M``):
+
+    range_vars  — добавить переменные ``hi``, ``lo`` и строки ``lo <= M(z_k) <= hi``;
+    objective   — ``"range"``: минимизировать размах ``hi - lo``;
+    range_max   — верхняя граница размаха ``hi - lo`` (Н·мм).
     """
     _check_norm(norm)
-    if objective not in ("t", "budget"):
-        raise ValueError(f"Неизвестная цель {objective!r}; допустимы: 't', 'budget'")
+    if objective not in ("t", "budget", "range"):
+        raise ValueError(f"Неизвестная цель {objective!r}; допустимы: 't', 'budget', "
+                         f"'range'")
     if (objective == "budget" or budget is not None) and not budget_vars:
         raise ValueError("Бюджет требует budget_vars=True")
+    if (objective == "range" or range_max is not None) and not range_vars:
+        raise ValueError("Размах эпюры требует range_vars=True")
 
     z = np.asarray(z, dtype=float)
     s_init = list(s_init)
@@ -188,13 +207,16 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
     G = heaviside_ramp(z[:, None] - L3_use[None, free_idx])
 
     n_u = (n_free if norm == "l1" else 1) if budget_vars and n_free else 0
-    n_vars = n_free + n_u + 1
     t_idx = n_free + n_u
+    hi_idx, lo_idx = t_idx + 1, t_idx + 2      # только при range_vars
+    n_vars = t_idx + 1 + (2 if range_vars else 0)
     c = np.zeros(n_vars)
     if objective == "t":
         c[t_idx] = w2
-    else:
+    elif objective == "budget":
         c[n_free:t_idx] = 1.0
+    else:
+        c[hi_idx], c[lo_idx] = w2, -w2
 
     rows, rhs = [], []
     if moment_rows:
@@ -205,6 +227,21 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
         block[:, t_idx] = -1.0
         rows.append(block)
         rhs.append(np.concatenate([-M_fixed, M_fixed]) / w2)
+
+    if range_vars:
+        # M(z_k) <= hi  и  lo <= M(z_k)  (поделено на w2, как строки |M| <= t)
+        block = np.zeros((2 * n_z, n_vars))
+        block[0:n_z, 0:n_free] = G
+        block[0:n_z, hi_idx] = -1.0
+        block[n_z:, 0:n_free] = -G
+        block[n_z:, lo_idx] = 1.0
+        rows.append(block)
+        rhs.append(np.concatenate([-M_fixed, M_fixed]) / w2)
+        if range_max is not None:
+            row = np.zeros((1, n_vars))
+            row[0, hi_idx], row[0, lo_idx] = 1.0, -1.0
+            rows.append(row)
+            rhs.append(np.array([range_max / w2]))
 
     fixed_abs = np.abs(s_const_vals[[i for i in range(n) if s_fixed[i]]])
     budget_const = static_moment(fixed_abs, norm)
@@ -241,11 +278,14 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
                   else [tuple(s_bounds[i]) for i in free_idx])
     t_max_scaled = None if t_max is None else t_max / w2
     bounds = var_bounds + [(0, None)] * n_u + [(0, t_max_scaled)]  # u >= 0, 0 <= t <= t_max
+    if range_vars:
+        bounds += [(None, None), (None, None)]                       # hi, lo свободны
 
     return CounterweightLP(A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, c=c,
                            bounds=bounds, free_idx=free_idx, L3=L3_use,
                            s_const_vals=s_const_vals, M_fixed=M_fixed, omega=omega,
-                           n_u=n_u, norm=norm, budget_const=budget_const)
+                           n_u=n_u, norm=norm, budget_const=budget_const,
+                           has_range=range_vars)
 
 
 def _solve(lp: CounterweightLP, axis: str, what: str = ""):
@@ -320,10 +360,17 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
                             axis: str = "x", verbose: bool = True,
                             group2_percent: float = 100.0, norm: str = "l1",
                             budget_eps: float = 1e-9,
-                            levels: Optional[dict] = None) -> dict:
+                            levels: Optional[dict] = None,
+                            smooth_percent: float = 0.0) -> dict:
     """Подбирает коэффициенты s_i (F3_i = s_i * omega^2), минимизируя max|M(z)|
     при балансе сил, нулевом суммарном внешнем моменте и бюджете статического
     момента ``B(p) = B_min + p/100 * (B_max - B_min)``.
+
+    Сглаживание (``smooth_percent = q > 0``): дополнительно ограничивается размах
+    эпюры ``R = max M - min M``: ``R <= R(q) = R_hi - q/100 * (R_hi - R_lo)``, где
+    ``R_hi`` — размах несглаженного решения (q = 0), ``R_lo`` — минимально возможный
+    размах при том же бюджете. Среди эпюр с таким размахом берётся эпюра с
+    наименьшим max|M|, т.е. сглаживание покупается минимальным ростом max|M|.
 
     Параметры:
         z, L1, F1, L2, F2 — как в ``total_distribution``.
@@ -339,7 +386,10 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
         budget_eps — допуск: в шаге 3 на max|M| (относительный; абсолютный в Н·мм,
             если M_opt < 1) и на бюджет B(p) (относительный).
         levels — результат этой же функции для той же задачи: из него берутся
-            ``s_group1``, B_min, B_max, M_opt (шаги 1-3 не пересчитываются).
+            ``s_group1``, B_min, B_max, M_opt (шаги 1-3 не пересчитываются), а при
+            том же ``group2_percent`` — и минимальный размах R_lo.
+        smooth_percent — степень сглаживания, 0..100: 0 (по умолчанию) — без
+            сглаживания, 100 — минимально возможный размах эпюры.
 
     Бюджет по каждой оси свой: минимизируется ``sum|s|`` по этой оси, а не
     сумма модулей векторов ``sqrt(s_x^2 + s_y^2)``.
@@ -349,11 +399,17 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
     ``s_group1`` (решение шага 1), ``s_group2 = s - s_group1`` (декомпозиция
     отчёта, а не отдельные грузы), ``static_moment_sum``, ``static_moment_min``
     (B_min), ``static_moment_max`` (B_max), ``group2_percent``, ``max_moment_opt``
-    (M_opt, Н·мм).
+    (M_opt, Н·мм); по сглаживанию — ``smooth_percent``, ``moment_range`` (размах
+    итоговой эпюры), ``moment_range_max`` (R_hi), ``moment_range_min`` (R_lo; nan,
+    если сглаживание не запускалось), ``max_moment_unsmoothed`` (max|M| при q = 0);
+    всё в Н·мм.
     """
     if not 0.0 <= float(group2_percent) <= 100.0:
         raise ValueError(f"group2_percent должен быть в диапазоне 0..100, "
                          f"получено {group2_percent}")
+    if not 0.0 <= float(smooth_percent) <= 100.0:
+        raise ValueError(f"smooth_percent должен быть в диапазоне 0..100, "
+                         f"получено {smooth_percent}")
     _check_norm(norm)
     z = np.asarray(z, dtype=float)
     common = dict(s_fixed=s_fixed, L3=L3, s_bounds=s_bounds)
@@ -370,12 +426,16 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
                   f"{round(lp.M_fixed[-1] * NMM_TO_NM, 6)} Н·м")
         s = lp.s_const_vals
         B = static_moment(s, norm)
+        R = float(np.ptp(lp.M_fixed))
+        M_max = float(np.max(np.abs(lp.M_fixed)))
         return {"s": s, "F3": s * omega ** 2, "M": lp.M_fixed, "success": True,
                 "result": None, "lp": lp,
                 "s_group1": s.copy(), "s_group2": np.zeros_like(s),
                 "static_moment_sum": B, "static_moment_min": B, "static_moment_max": B,
-                "group2_percent": float(group2_percent),
-                "max_moment_opt": float(np.max(np.abs(lp.M_fixed)))}
+                "group2_percent": float(group2_percent), "max_moment_opt": M_max,
+                "smooth_percent": float(smooth_percent), "moment_range": R,
+                "moment_range_min": R, "moment_range_max": R,
+                "max_moment_unsmoothed": M_max}
 
     args = (z, L1, F1, L2, F2, omega, s_init)
     if levels is None:
@@ -391,11 +451,32 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
     degenerate = B_max - B_min <= _tolerance(B_max, budget_eps)
 
     B_p = B_min + float(group2_percent) / 100.0 * (B_max - B_min)
-    lp = build_counterweight_lp(*args, **common, budget_vars=True, norm=norm,
-                                budget=B_p * (1.0 + budget_eps))
+    budgeted = dict(**common, budget_vars=True, norm=norm, budget=B_p * (1.0 + budget_eps))
+    lp = build_counterweight_lp(*args, **budgeted)
     res = _solve(lp, axis)
 
     s_full = lp.assemble_solution(res.x)
+    M_res = total_distribution(z, L1, F1, L2, F2, F3=s_full * omega ** 2, L3=lp.L3)
+    M_unsmoothed = float(np.max(np.abs(M_res)))
+    R_hi, R_lo = float(np.ptp(M_res)), float("nan")
+    smooth_degenerate = False
+    if float(smooth_percent) > 0.0:
+        same_budget = (levels is not None
+                       and levels.get("group2_percent") == float(group2_percent)
+                       and np.isfinite(levels.get("moment_range_min", np.nan)))
+        if same_budget:
+            R_lo = float(levels["moment_range_min"])
+        else:
+            lp_r = build_counterweight_lp(*args, **budgeted, moment_rows=False,
+                                          range_vars=True, objective="range")
+            R_lo = lp_r.range_value(_solve(lp_r, axis).x)
+        R_lo = min(R_lo, R_hi)
+        smooth_degenerate = R_hi - R_lo <= _tolerance(R_hi, budget_eps)
+        R_q = R_hi - float(smooth_percent) / 100.0 * (R_hi - R_lo)
+        lp = build_counterweight_lp(*args, **budgeted, range_vars=True,
+                                    range_max=R_q + _tolerance(R_q, budget_eps))
+        res = _solve(lp, axis)
+        s_full = lp.assemble_solution(res.x)
     s_group1 = s_group1.copy()
     s_group2 = s_full - s_group1
     _zero_noise(s_group1, s_group2)
@@ -408,6 +489,14 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
               f"B_min = {B_min:.6f}, B_max = {B_max:.6f}, B(p) = {B_p:.6f} кг·м")
         if degenerate:
             print(f"[{axis}] B_max = B_min: группа 2 пуста, все p дают одно решение")
+        if float(smooth_percent) > 0.0:
+            print(f"[{axis}] сглаживание: {smooth_percent:g} %, размах эпюры "
+                  f"{np.ptp(M_res) * NMM_TO_NM:.4f} Н·м (без сглаживания "
+                  f"{R_hi * NMM_TO_NM:.4f}, минимально возможный "
+                  f"{R_lo * NMM_TO_NM:.4f}); max|M| без сглаживания "
+                  f"{M_unsmoothed * NMM_TO_NM:.4f} Н·м")
+            if smooth_degenerate:
+                print(f"[{axis}] размах уже минимален: сглаживание ничего не меняет")
         print(f"[{axis}] max|M| = {np.max(np.abs(M_res)) * NMM_TO_NM:.4f} Н·м "
               f"(минимально возможный {M_opt * NMM_TO_NM:.4f} Н·м)")
         print(f"[{axis}] s = {np.round(s_full, 4)}")
@@ -421,7 +510,10 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
             "s_group1": s_group1, "s_group2": s_group2,
             "static_moment_sum": static_moment(s_full, norm),
             "static_moment_min": float(B_min), "static_moment_max": float(B_max),
-            "group2_percent": float(group2_percent), "max_moment_opt": float(M_opt)}
+            "group2_percent": float(group2_percent), "max_moment_opt": float(M_opt),
+            "smooth_percent": float(smooth_percent), "moment_range": float(np.ptp(M_res)),
+            "moment_range_min": R_lo, "moment_range_max": R_hi,
+            "max_moment_unsmoothed": M_unsmoothed}
 
 
 def optimize_counterweights_history(z, L1, F1, L2, F2, omega,

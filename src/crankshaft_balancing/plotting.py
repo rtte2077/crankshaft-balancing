@@ -313,3 +313,54 @@ def plot_group2_tradeoff(rows: Sequence[dict], norm: str = "l1",
     ax_m.set_title("Компромисс: max|M| и статический момент противовесов от p")
     fig.tight_layout()
     return _finish(fig, save_path, show)
+
+
+def plot_smooth_tradeoff(rows: Sequence[dict], save_path: Optional[str] = None,
+                         show: bool = True):
+    """max|M| (левая ось) и размах эпюры max M - min M (правая ось) от степени
+    сглаживания ``q``. ``rows`` — результат ``analysis.smooth_sweep``."""
+    q = [r["smooth_percent"] for r in rows]
+    fig, ax_m = plt.subplots(figsize=(9, 5))
+    ax_r = ax_m.twinx()
+    m_color, r_color = "#2563eb", "#16a34a"
+    ax_m.plot(q, [r["max_moment_y"] for r in rows], "-o", color=m_color,
+              label="max|M|, ось Y")
+    ax_m.plot(q, [r["max_moment_x"] for r in rows], "--s", color=m_color, alpha=0.6,
+              label="max|M|, ось X")
+    ax_r.plot(q, [r["moment_range_y"] for r in rows], "-o", color=r_color,
+              label="размах max M − min M, ось Y")
+    ax_r.plot(q, [r["moment_range_x"] for r in rows], "--s", color=r_color, alpha=0.6,
+              label="размах max M − min M, ось X")
+    ax_m.set_xlabel("Степень сглаживания q, %")
+    ax_m.set_ylabel("max|M|, Н·м", color=m_color)
+    ax_r.set_ylabel("Размах эпюры max M − min M, Н·м", color=r_color)
+    ax_m.tick_params(axis="y", colors=m_color)
+    ax_r.tick_params(axis="y", colors=r_color)
+    ax_m.grid(True, alpha=0.3)
+    lines = ax_m.get_lines() + ax_r.get_lines()
+    ax_m.legend(lines, [ln.get_label() for ln in lines], loc="center left", fontsize=9)
+    ax_m.set_title("Сглаживание: размах эпюры и max|M| от q")
+    fig.tight_layout()
+    return _finish(fig, save_path, show)
+
+
+def plot_smooth_moments(curves: Sequence[tuple], shaft_length: float,
+                        save_path: Optional[str] = None, show: bool = True):
+    """Эпюры момента при разной степени сглаживания на одном графике по осям.
+
+    ``curves`` — список ``(q, z, M_x, M_y)``: ``z`` от правого конца вала (как ``Z``),
+    ``M_x``, ``M_y`` в Н·мм.
+    """
+    fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
+    for ax, idx, name in ((axes[0], 3, "Y"), (axes[1], 2, "X")):
+        for item in curves:
+            ax.plot(shaft_length - np.asarray(item[1]), np.asarray(item[idx]) * NMM_TO_NM,
+                    label=f"q = {item[0]:g} %")
+        ax.axhline(0, color="black", lw=0.6)
+        ax.set_ylabel(f"M (ось {name}), Н·м")
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=9)
+    axes[-1].set_xlabel("Координата вдоль вала, мм (0 — левый конец)")
+    fig.suptitle("Эпюры момента при разной степени сглаживания")
+    fig.tight_layout()
+    return _finish(fig, save_path, show)

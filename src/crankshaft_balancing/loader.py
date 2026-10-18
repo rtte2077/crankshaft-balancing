@@ -8,7 +8,7 @@ from .constraints import ALLOWED_KEYS, CounterweightConstraints
 from .geometry import ShaftComponent
 
 # Ключи блока counterweights, которые не являются ограничениями по осям.
-NON_CONSTRAINT_KEYS = {"positions", "group2_percent"}
+NON_CONSTRAINT_KEYS = {"positions", "group2_percent", "smooth_percent"}
 
 
 def load_shaft(path: Union[str, Path]) -> Tuple[EngineConfig, List[ShaftComponent]]:
@@ -62,16 +62,27 @@ def load_counterweight_positions(path: Union[str, Path]) -> Optional[List[float]
     return None if positions is None else [float(x) for x in positions]
 
 
-def load_group2_percent(path: Union[str, Path]) -> Optional[float]:
-    """Необязательный ``counterweights.group2_percent`` — доля группы 2 статических
-    моментов, 0..100. Нет ключа — ``None`` (берётся значение по умолчанию, 100).
-    Значение, переданное в ``analyze()`` или CLI явно, перекрывает JSON."""
+def _load_percent(path: Union[str, Path], key: str) -> Optional[float]:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    value = data.get("counterweights", {}).get("group2_percent")
+    value = data.get("counterweights", {}).get(key)
     if value is None:
         return None
     value = float(value)
     if not 0.0 <= value <= 100.0:
-        raise ValueError(f"В {path}: counterweights.group2_percent должен быть "
+        raise ValueError(f"В {path}: counterweights.{key} должен быть "
                          f"в диапазоне 0..100, получено {value}")
     return value
+
+
+def load_group2_percent(path: Union[str, Path]) -> Optional[float]:
+    """Необязательный ``counterweights.group2_percent`` — доля группы 2 статических
+    моментов, 0..100. Нет ключа — ``None`` (берётся значение по умолчанию, 100).
+    Значение, переданное в ``analyze()`` или CLI явно, перекрывает JSON."""
+    return _load_percent(path, "group2_percent")
+
+
+def load_smooth_percent(path: Union[str, Path]) -> Optional[float]:
+    """Необязательный ``counterweights.smooth_percent`` — степень сглаживания эпюры,
+    0..100. Нет ключа — ``None`` (по умолчанию 0, без сглаживания). Значение,
+    переданное в ``analyze()`` или CLI явно, перекрывает JSON."""
+    return _load_percent(path, "smooth_percent")
