@@ -115,7 +115,7 @@ class CounterweightLP:
         return float(x[self.t_idx] * self.t_scale)
 
     def range_value(self, x: np.ndarray) -> float:
-        """Размах эпюры hi - lo (Н·мм) из решения ЛП."""
+        """Колебание эпюры hi - lo (Н·мм) из решения ЛП."""
         if not self.has_range:
             raise ValueError("В этой ЛП нет переменных колебания")
         return float((x[self.t_idx + 1] - x[self.t_idx + 2]) * self.t_scale)
@@ -182,7 +182,7 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
     t_max       — верхняя граница ``t``, т.е. ``max|M| <= t_max`` (Н·мм);
     moment_rows — включать ли строки ``-t <= M(z_k) <= t`` (для шага 1 не нужны).
 
-    Размах эпюры ``max M - min M``:
+    Колебание эпюры ``max M - min M``:
 
     range_vars  — добавить переменные ``hi``, ``lo`` и строки ``lo <= M(z_k) <= hi``;
     objective   — ``"range"``: минимизировать колебание ``hi - lo``;
@@ -195,7 +195,7 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
     if (objective == "budget" or budget is not None) and not budget_vars:
         raise ValueError("Бюджет требует budget_vars=True")
     if (objective == "range" or range_max is not None) and not range_vars:
-        raise ValueError("Размах эпюры требует range_vars=True")
+        raise ValueError("Колебание эпюры требует range_vars=True")
 
     z = np.asarray(z, dtype=float)
     s_init = list(s_init)
