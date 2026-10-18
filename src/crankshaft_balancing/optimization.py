@@ -369,9 +369,8 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
     Сглаживание (``smooth_percent = q > 0``): дополнительно ограничивается размах
     эпюры ``R = max M - min M``: ``R <= R(q) = R_hi - q/100 * (R_hi - R_lo)``, где
     ``R_hi`` — размах несглаженного решения (q = 0), ``R_lo`` — минимально возможный
-    размах при том же бюджете (при ``group2_percent = 100`` бюджет не ограничивает
-    сглаживание). Среди эпюр с таким размахом берётся эпюра с наименьшим max|M|,
-    т.е. сглаживание покупается минимальным ростом max|M|.
+    размах при том же бюджете. Среди эпюр с таким размахом берётся эпюра с
+    наименьшим max|M|, т.е. сглаживание покупается минимальным ростом max|M|.
 
     Параметры:
         z, L1, F1, L2, F2 — как в ``total_distribution``.
@@ -465,19 +464,16 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
         same_budget = (levels is not None
                        and levels.get("group2_percent") == float(group2_percent)
                        and np.isfinite(levels.get("moment_range_min", np.nan)))
-        # При p = 100 бюджет неактивен (группа 2 не ограничена): сглаживание может
-        # добавлять статический момент сверх B_max. При p < 100 действует бюджет B(p).
-        smooth_limits = (dict(**common) if float(group2_percent) >= 100.0 else budgeted)
         if same_budget:
             R_lo = float(levels["moment_range_min"])
         else:
-            lp_r = build_counterweight_lp(*args, **smooth_limits, moment_rows=False,
+            lp_r = build_counterweight_lp(*args, **budgeted, moment_rows=False,
                                           range_vars=True, objective="range")
             R_lo = lp_r.range_value(_solve(lp_r, axis).x)
         R_lo = min(R_lo, R_hi)
         smooth_degenerate = R_hi - R_lo <= _tolerance(R_hi, budget_eps)
         R_q = R_hi - float(smooth_percent) / 100.0 * (R_hi - R_lo)
-        lp = build_counterweight_lp(*args, **smooth_limits, range_vars=True,
+        lp = build_counterweight_lp(*args, **budgeted, range_vars=True,
                                     range_max=R_q + _tolerance(R_q, budget_eps))
         res = _solve(lp, axis)
         s_full = lp.assemble_solution(res.x)

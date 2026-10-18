@@ -668,79 +668,24 @@ $$R(q) = R_{hi} - \frac{q}{100}\,(R_{hi} - R_{lo}),$$
 A larger `q` gives a smaller feasible set, so `max|M|` does not decrease with `q`, while
 the range decreases linearly. Each solution is the best in `max|M|` for its range, i.e.
 smoothing is bought with the minimal sacrifice in moment. Smoothing works inside the
-group-2 budget: for `p < 100` the total static moment does not exceed $B(p)$; for
-`p = 100` (default) the budget is inactive and the counterweights may get heavier. The
-axes are independent.
+group-2 budget: `p` is applied first, then `q`. The axes are independent.
 
-### Example: q = 0, 50, 100
+### What it gives on the example
 
-```bash
-crankbalance examples/example_shaft.json --smooth-percent 0     # no smoothing
-crankbalance examples/example_shaft.json --smooth-percent 50
-crankbalance examples/example_shaft.json --smooth-percent 100   # maximum smoothing
-```
+`example_shaft.json`, y axis:
 
-Or from Python:
+| `q` | max\|M\|, N·m | range, N·m |
+|---|---|---|
+| 0 | 135.5 | 271.0 |
+| 30 | 155.8 | 250.6 |
+| 50 | 169.3 | 237.0 |
+| 100 | 203.2 | 203.2 |
 
-```python
-from crankshaft_balancing import analyze, load_shaft
-
-engine, components = load_shaft("examples/example_shaft.json")
-for q in (0, 50, 100):
-    res = analyze(engine, components, smooth_percent=q, verbose=False)
-    print(q, res.max_moment_y, res.moment_range_y, res.result_y["s"])
-```
-
-Result for `examples/example_shaft.json` (y axis, 0.01 mm grid):
-
-| `q` | max\|M\|, N·m | range max M − min M, N·m | Σ\|s_y\|, kg·m |
-|---|---|---|---|
-| 0 | 135.5 | 271.0 | 1.3653 |
-| 50 | 169.4 | 237.2 | 1.4395 |
-| 100 | 203.3 | 203.3 | 1.4395 |
-
-![Bending moment diagrams at q = 0, 50, 100](docs/img/smooth_overlay_en.png)
-
-**q = 0** — no smoothing: the smallest peak, the diagram swings from −135.5 to
-+135.5 N·m.
-
-![Bending moment diagram at q = 0](docs/img/smooth_q0_en.png)
-
-**q = 50** — the range is reduced by half of what is possible, the peak grows to
-169.4 N·m.
-
-![Bending moment diagram at q = 50](docs/img/smooth_q50_en.png)
-
-**q = 100** — the smallest range: the diagram does not change sign, the range equals the
-peak, 203.3 N·m.
-
-![Bending moment diagram at q = 100](docs/img/smooth_q100_en.png)
-
-Static moments of the counterweights `s = m·r`, kg·m. In the example all forces lie in
-the JSON `z` plane, so `s_x = 0` and `|s| = |s_y|`; the sign of `s_y` gives the direction:
-"+" means 0°, "−" means 180° from the z axis.
-
-| No. | x, mm | q = 0: s_y | q = 50: s_y | q = 100: s_y |
-|---|---|---|---|---|
-| 0 | 31.469 | −0.1178 | −0.1350 | −0.1521 |
-| 1 | 99.531 | −0.2235 | −0.2156 | −0.2078 |
-| 2 | 162.469 | +0.1549 | +0.1813 | +0.2078 |
-| 3 | 230.531 | +0.1864 | +0.1878 | +0.1521 |
-| 4 | 293.469 | +0.1864 | +0.1164 | +0.1521 |
-| 5 | 361.531 | +0.1549 | +0.2342 | +0.2078 |
-| 6 | 424.469 | −0.2235 | −0.2342 | −0.2078 |
-| 7 | 492.531 | −0.1178 | −0.1350 | −0.1521 |
-| | **Σ\|s_y\|** | **1.3653** | **1.4395** | **1.4395** |
-
-The set of `s` for a given `q` may not be unique (at `q = 50` the solver returned an
-asymmetric set although the shaft is symmetric): the same `max|M|` and range are given by
-different `s`. Compare `max|M|` and the range, not individual coefficients.
-
-In this example the range and `max|M|` trade one to one: each N·m of range reduction
-costs one N·m of peak. The range cannot go below 203 N·m: it is set by the crankpin
-force, which counterweights on the crank webs cannot compensate. For the constrained
-example (`example_shaft_constrained.json`) the range barely decreases
-(402.0 → 401.5 N·m).
+At `q = 100` the diagram becomes one-sided (does not change sign). In this example the
+range and `max|M|` trade one to one: each N·m of range reduction costs one N·m of peak.
+The range cannot go below 203 N·m: it is set by the crankpin force, which counterweights
+on the crank webs cannot compensate. For the constrained example
+(`example_shaft_constrained.json`) the range barely decreases (402.0 → 401.5 N·m).
 
 ### How to set it
 
