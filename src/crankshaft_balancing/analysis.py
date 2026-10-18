@@ -60,12 +60,12 @@ class BalanceResult:
 
     @property
     def moment_range_x(self) -> float:
-        """Размах эпюры max Mx - min Mx, Н·м."""
+        """Колебание эпюры max Mx - min Mx, Н·м."""
         return float(self.result_x["moment_range"] * NMM_TO_NM)
 
     @property
     def moment_range_y(self) -> float:
-        """Размах эпюры max My - min My, Н·м."""
+        """Колебание эпюры max My - min My, Н·м."""
         return float(self.result_y["moment_range"] * NMM_TO_NM)
 
 

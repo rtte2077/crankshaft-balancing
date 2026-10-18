@@ -134,12 +134,14 @@ applied to the non-smooth function `max(|...|)`, linear programming guarantees t
 minimum.
 
 The optimum in `max|M|` is usually not unique: different sets of `s` give the same
-minimal peak. Among them the set with the **smallest range of the diagram**
-$\max M - \min M$ is taken (a second LP: $\min (hi - lo)$ subject to
-$lo \le M(z_k) \le hi$ and $\max|M|$ not above the minimum found), and among those the
-lightest one. The peak does not change. On the examples in the repository all optimal
-solutions have the same range (usually $2\max|M|$: the diagram touches both $+\max$ and
-$-\max$); on shafts with `bounds` constraints the choice by range can nearly halve it.
+minimal peak. Among them the set with the **smallest oscillation of the diagram**
+$\mathrm{osc}\,M = \max M - \min M$ is taken — in analysis, the oscillation of a
+function on an interval is the difference between its largest and smallest values (here,
+over the shaft length). This is a second LP: $\min (hi - lo)$ subject to
+$lo \le M(z_k) \le hi$ and $\max|M|$ not above the minimum found; among those the
+lightest one is taken. The peak does not change. On the examples in the repository all optimal
+solutions have the same oscillation (usually $2\max|M|$: the diagram touches both $+\max$ and
+$-\max$); on shafts with `bounds` constraints the choice by oscillation can nearly halve it.
 
 The constraints on the diagram are checked only at the grid sections next to the points
 where forces are applied: between those points $M(z)$ is linear, so at the other sections
@@ -207,7 +209,7 @@ Equivalent: `python -m crankshaft_balancing examples/example_shaft.json --verify
 Output (abridged; the status lines are in Russian):
 
 ```
-[y] max|M| = 135.5133 Н·м (минимально возможный 135.5133 Н·м), размах эпюры max M - min M = 271.0267 Н·м
+[y] max|M| = 135.5133 Н·м (минимально возможный 135.5133 Н·м), колебание эпюры max M - min M = 271.0267 Н·м
 [y] баланс сил = -0.0 Н                              (force equilibrium)
 [y] суммарный внешний момент M(z[-1]) = 0.0 Н·м      (resultant external moment)
 ...
@@ -227,7 +229,7 @@ No.     x, mm  s_x (y), kg·m  s_y (z), kg·m  |s|, kg·m angle from z, deg  |s1
 
 > The values of `s` may differ slightly on your machine. The optimum of the problem is not
 > unique (different sets of `s` give the same minimum of `max|M|`). Among them the set with
-> the smallest range of the diagram is taken, and among those the one with the smallest
+> the smallest oscillation of the diagram is taken, and among those the one with the smallest
 > sum of `|s|` (step 3 in [Two groups of static moments](#two-groups-of-static-moments)),
 > but even that may not be unique. Compare `max|M|`, not individual coefficients.
 
@@ -570,8 +572,8 @@ problems stay linear (HiGHS gives the global optimum):
    stored as `s_group1`.
 2. $M_{opt}$ — the smallest possible $\max|M|$ (the original problem).
 3. $B_{\max}$ — minimum of $\sum u_i$ subject to $\max|M| \le M_{opt}(1+\varepsilon)$
-   and the smallest range of the diagram at that peak: among all solutions with the
-   smallest moment and the smallest range, the "lightest" one is taken
+   and the smallest oscillation of the diagram at that peak: among all solutions with the
+   smallest moment and the smallest oscillation, the "lightest" one is taken
    ($\varepsilon$ = `budget_eps`, default $10^{-9}$).
 4. For a given `p`:
 
@@ -580,7 +582,7 @@ $$B(p) = B_{\min} + \frac{p}{100}\,(B_{\max} - B_{\min}),$$
    and $\min t$ is solved subject to $-t \le M(z_k) \le t$, the two equalities and
    $\sum_i u_i \le B(p)$.
 5. Among the solutions of step 4 (the same $\max|M|$ and budget) the one with the
-   smallest range of the diagram $\max M - \min M$ is taken.
+   smallest oscillation of the diagram $\max M - \min M$ is taken.
 
 Fixed coefficients (`fixed`, `zero`) enter the budget as constants. A larger `p` gives a
 larger feasible set, so `max|M|` does not increase with `p`. The derivation is in
@@ -670,17 +672,17 @@ the components `s_x`, `s_y` are combined into the table.
 |---|---|---|
 | 1 | $\min \sum\|s_i\|$ | $B_{\min}$ — the smallest total static moment that balances the shaft; this solution is group 1 (`s_group1`) |
 | 2 | $\min \max\|M\|$ | $M_{opt}$ — the smallest possible peak of the diagram |
-| 3 | $\min (\max M - \min M)$ subject to $\max\|M\| = M_{opt}$ | $R_{opt}$ — the smallest range of the diagram among the solutions with the smallest peak |
-| 4 | $\min \sum\|s_i\|$ subject to $\max\|M\| = M_{opt}$ and range $R_{opt}$ | $B_{\max}$ — the lightest of those solutions |
+| 3 | $\min (\max M - \min M)$ subject to $\max\|M\| = M_{opt}$ | $R_{opt}$ — the smallest oscillation of the diagram among the solutions with the smallest peak |
+| 4 | $\min \sum\|s_i\|$ subject to $\max\|M\| = M_{opt}$ and oscillation $R_{opt}$ | $B_{\max}$ — the lightest of those solutions |
 | 5 | $\min \max\|M\|$ subject to $\sum\|s_i\| \le B(p)$ | $T(p)$ — the smallest peak within the budget $B(p) = B_{\min} + \tfrac{p}{100}(B_{\max} - B_{\min})$ |
 | 6 | $\min (\max M - \min M)$ subject to $\max\|M\| = T(p)$ and $\sum\|s_i\| \le B(p)$ | **the final `s`** |
 
-Order of importance of the criteria: first the **peak** `max|M|`, then the **range** of
+Order of importance of the criteria: first the **peak** `max|M|`, then the **oscillation** of
 the diagram `max M − min M`, then the **mass** of the counterweights $\sum|s_i|$. With
 `p = 100` (default) the result is the solution with the smallest peak, among those the
-one with the smallest range, and among those the lightest. With `p < 100` the total
+one with the smallest oscillation, and among those the lightest. With `p < 100` the total
 static moment is limited by $B(p)$, and within that budget the same order "peak, then
-range" applies.
+oscillation" applies.
 
 The equalities in steps 3–6 ("subject to $\max|M| = M_{opt}$" etc.) hold with the
 relative tolerance `budget_eps` = $10^{-9}$, so that the solver is not stopped by
@@ -705,7 +707,7 @@ $B_{\max} = 1.3653$ kg·m. The final `s_y`: −0.1178, −0.2235, +0.1549, +0.18
 Global optimality of the final result is verified on the last problem (step 6) with the
 dual certificate and the KKT conditions (`--verify`). If several equivalent solutions
 remain after all the steps, the solver returns one of them; this does not affect
-`max|M|`, the range or the sum of `|s|`.
+`max|M|`, the oscillation or the sum of `|s|`.
 
 ## Coordinate system and units
 

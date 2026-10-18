@@ -99,7 +99,7 @@ def test_history_converges(result):
 
 
 def _plain_min_max(z, L1, F1, L2, F2, w, n, L3, s_bounds):
-    """Произвольное решение исходной задачи min max|M| (без выбора по размаху)."""
+    """Произвольное решение исходной задачи min max|M| (без выбора по колебанию)."""
     from scipy.optimize import linprog
     from crankshaft_balancing import build_counterweight_lp
     lp = build_counterweight_lp(z, L1, F1, L2, F2, w, [1.0] * n, L3=L3, s_bounds=s_bounds)
@@ -111,7 +111,7 @@ def _plain_min_max(z, L1, F1, L2, F2, w, n, L3, s_bounds):
 
 def test_smallest_range_among_min_max_solutions():
     # синтетический вал, где оптимум по max|M| неединственный и решения различаются
-    # размахом эпюры max M - min M
+    # колебанием эпюры max M - min M
     from crankshaft_balancing import section_grid
     z, w = section_grid(300.0, 1.0), 100.0
     L1, F1 = [15.6, 32.9, 53.8, 118.0], [679.0, -470.0, -870.0, 77.0]

@@ -21,14 +21,14 @@
    (эпюра M не ограничивается) — ``minimal_static_moment``;
 2. ``M_opt`` — минимально возможный ``max|M|`` (исходная задача);
 3. ``B_max`` — минимальный бюджет среди решений с ``max|M| <= M_opt`` и наименьшим
-   при этом размахом эпюры (с допуском ``budget_eps``) — ``minimal_moment_budget``;
+   при этом колебанием эпюры (с допуском ``budget_eps``) — ``minimal_moment_budget``;
 4. для процента ``p``: ``min t`` при бюджете
    ``B(p) = B_min + p/100 * (B_max - B_min)`` — ``optimize_counterweights``;
-5. среди решений шага 4 (тот же max|M|, тот же бюджет) — наименьший размах эпюры
+5. среди решений шага 4 (тот же max|M|, тот же бюджет) — наименьшее колебание эпюры
    ``max M - min M``.
 
 Оптимум по max|M| обычно неединственный; шаги 3 и 5 выбирают из равноценных по
-max|M| решений: сначала с наименьшим размахом эпюры, затем самое лёгкое.
+max|M| решений: сначала с наименьшим колебанием эпюры, затем самое лёгкое.
 
 Бюджет считается по каждой оси отдельно: минимизируются ``sum|s_x|`` и ``sum|s_y|``
 по отдельности, а не ``sum sqrt(s_x^2 + s_y^2)`` — последнее связало бы оси и
@@ -68,8 +68,8 @@ class CounterweightLP:
     Переменные ЛП: [s_free (n_free штук), u (n_u штук), t', (hi', lo')]. ``u`` есть
     только в задачах с бюджетом статического момента: ``n_free`` переменных при
     ``norm="l1"`` (u_i >= |s_i|) или одна при ``norm="linf"`` (u >= |s_i| для всех i).
-    ``hi'``, ``lo'`` — только в задачах с размахом эпюры: ``lo <= M(z_k) <= hi``,
-    размах ``hi - lo`` (в тех же единицах ``/ omega**2``, что и ``t'``).
+    ``hi'``, ``lo'`` — только в задачах с колебанием эпюры: ``lo <= M(z_k) <= hi``,
+    колебание ``hi - lo`` (в тех же единицах ``/ omega**2``, что и ``t'``).
 
     Для обусловленности строки эпюры поделены на ``omega**2``, а вместо
     ``t`` (Н·мм) переменная ``t' = t / omega**2``; коэффициент цели при ней —
@@ -91,7 +91,7 @@ class CounterweightLP:
     n_u: int = 0
     norm: str = "l1"
     budget_const: float = 0.0   # вклад зафиксированных s в бюджет (константа)
-    has_range: bool = False     # есть ли переменные hi', lo' (размах эпюры)
+    has_range: bool = False     # есть ли переменные hi', lo' (колебание эпюры)
 
     @property
     def n_free(self) -> int:
@@ -117,7 +117,7 @@ class CounterweightLP:
     def range_value(self, x: np.ndarray) -> float:
         """Размах эпюры hi - lo (Н·мм) из решения ЛП."""
         if not self.has_range:
-            raise ValueError("В этой ЛП нет переменных размаха")
+            raise ValueError("В этой ЛП нет переменных колебания")
         return float((x[self.t_idx + 1] - x[self.t_idx + 2]) * self.t_scale)
 
     def assemble_solution(self, x: np.ndarray) -> np.ndarray:
@@ -185,8 +185,8 @@ def build_counterweight_lp(z, L1, F1, L2, F2, omega,
     Размах эпюры ``max M - min M``:
 
     range_vars  — добавить переменные ``hi``, ``lo`` и строки ``lo <= M(z_k) <= hi``;
-    objective   — ``"range"``: минимизировать размах ``hi - lo``;
-    range_max   — верхняя граница размаха ``hi - lo`` (Н·мм).
+    objective   — ``"range"``: минимизировать колебание ``hi - lo``;
+    range_max   — верхняя граница колебания ``hi - lo`` (Н·мм).
     """
     _check_norm(norm)
     if objective not in ("t", "budget", "range"):
@@ -358,8 +358,8 @@ def minimal_moment_budget(z, L1, F1, L2, F2, omega, s_init, s_fixed=None,
                           budget_eps: float = 1e-9,
                           axis: str = "x") -> Tuple[np.ndarray, float, float]:
     """Шаги 2-3: ``M_opt`` — минимально возможный max|M| (Н·мм); затем среди решений с
-    ``max|M| <= M_opt + допуск`` — наименьший размах эпюры ``R_opt``, и ``B_max`` —
-    минимальный бюджет среди решений с ``max|M| <= M_opt`` и размахом ``R_opt``.
+    ``max|M| <= M_opt + допуск`` — наименьшее колебание эпюры ``R_opt``, и ``B_max`` —
+    минимальный бюджет среди решений с ``max|M| <= M_opt`` и колебанием ``R_opt``.
 
     Допуск ``budget_eps`` относительный (абсолютный, в Н·мм, при ``M_opt < 1``).
     Возвращает ``(s, B_max, M_opt)``.
@@ -421,16 +421,16 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
     Бюджет по каждой оси свой: минимизируется ``sum|s|`` по этой оси, а не
     сумма модулей векторов ``sqrt(s_x^2 + s_y^2)``.
 
-    Среди решений с минимальным max|M| берётся решение с наименьшим размахом эпюры
+    Среди решений с минимальным max|M| берётся решение с наименьшим колебанием эпюры
     ``max M - min M`` (при ``group2_percent = 100`` — ещё и самое лёгкое из них).
 
     Возвращает dict: ``s``, ``F3``, ``M`` (Н·мм), ``success``, ``result`` (linprog;
-    последняя задача — минимум размаха при найденном max|M|),
+    последняя задача — минимум колебания при найденном max|M|),
     ``lp`` (CounterweightLP — нужен для проверок оптимальности), а также
     ``s_group1`` (решение шага 1), ``s_group2 = s - s_group1`` (декомпозиция
     отчёта, а не отдельные грузы), ``static_moment_sum``, ``static_moment_min``
     (B_min), ``static_moment_max`` (B_max), ``group2_percent``, ``max_moment_opt``
-    (M_opt, Н·мм), ``moment_range`` (размах итоговой эпюры, Н·мм).
+    (M_opt, Н·мм), ``moment_range`` (колебание итоговой эпюры, Н·мм).
     """
     if not 0.0 <= float(group2_percent) <= 100.0:
         raise ValueError(f"group2_percent должен быть в диапазоне 0..100, "
@@ -476,7 +476,7 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
     budgeted = dict(**common, budget_vars=True, norm=norm, budget=B_p * (1.0 + budget_eps))
     lp4 = build_counterweight_lp(*args, **budgeted)
     T_p = lp4.t_value(_solve(lp4, axis).x)
-    # Шаг 5: среди решений с max|M| = T_p (и тем же бюджетом) — наименьший размах.
+    # Шаг 5: среди решений с max|M| = T_p (и тем же бюджетом) — наименьшее колебание.
     lp = build_counterweight_lp(*args, **budgeted, t_max=T_p + _tolerance(T_p, budget_eps),
                                 range_vars=True, objective="range")
     res = _solve(lp, axis)
@@ -495,7 +495,7 @@ def optimize_counterweights(z, L1, F1, L2, F2, omega,
         if degenerate:
             print(f"[{axis}] B_max = B_min: группа 2 пуста, все p дают одно решение")
         print(f"[{axis}] max|M| = {np.max(np.abs(M_res)) * NMM_TO_NM:.4f} Н·м "
-              f"(минимально возможный {M_opt * NMM_TO_NM:.4f} Н·м), размах эпюры "
+              f"(минимально возможный {M_opt * NMM_TO_NM:.4f} Н·м), колебание эпюры "
               f"max M - min M = {np.ptp(M_res) * NMM_TO_NM:.4f} Н·м")
         print(f"[{axis}] s = {np.round(s_full, 4)}")
         print(f"[{axis}] баланс сил = "
