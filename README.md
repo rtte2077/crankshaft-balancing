@@ -38,7 +38,6 @@
 - [Описание своего вала](#описание-своего-вала)
 - [Ограничения на противовесы](#ограничения-на-противовесы)
 - [Две группы статических моментов](#две-группы-статических-моментов)
-- [Сглаживание эпюры момента](#сглаживание-эпюры-момента)
 - [Система координат и единицы измерения](#система-координат-и-единицы-измерения)
 - [Таблица статических моментов противовесов](#таблица-статических-моментов-противовесов)
 - [Как читать результаты](#как-читать-результаты)
@@ -200,8 +199,6 @@ max|Mx| = 0.0000 Н·м, max|My| = 135.5133 Н·м
 | `--group2-percent P` | доля группы 2 статических моментов, 0…100 (по умолчанию значение из JSON, иначе 100); см. [Две группы статических моментов](#две-группы-статических-моментов) |
 | `--norm l1\|linf` | бюджет статического момента: сумма `|s_i|` (по умолчанию) или `max|s_i|` |
 | `--group2-sweep` | посчитать `p` = 0, 10, …, 100 и сохранить `group2_tradeoff.png` и `group2_tradeoff.csv` |
-| `--smooth-percent Q` | степень сглаживания эпюры, 0…100 (по умолчанию значение из JSON, иначе 0); см. [Сглаживание эпюры момента](#сглаживание-эпюры-момента) |
-| `--smooth-sweep` | посчитать `q` = 0, 10, …, 100 и сохранить `smooth_tradeoff.png`, `smooth_tradeoff.csv`, `smooth_moments.png` |
 | `--no-plots` | только расчёт, без графиков и файлов (таблица всё равно печатается) |
 | `--sensitivity` | сохранить графики чувствительности `max|M|` к каждому коэффициенту `s_i` |
 | `--convergence` | сохранить графики сходимости симплекс-метода (грубая сетка 2 мм; нужен SciPy, где ещё есть `linprog(method='simplex')`; для оси X ставятся границы ±5, как в исходном ноутбуке) |
@@ -219,7 +216,6 @@ max|Mx| = 0.0000 Н·м, max|My| = 135.5133 Н·м
 | `moment_3d.html` | то же, интерактивно (только с `--interactive`) |
 | `sensitivity_x.png`, `sensitivity_y.png` | чувствительность к коэффициентам (только с `--sensitivity`) |
 | `convergence_x.png`, `convergence_y.png` | ход симплекс-метода (только с `--convergence`) |
-| `smooth_tradeoff.png`, `smooth_tradeoff.csv`, `smooth_moments.png` | `max|M|` и размах эпюры от степени сглаживания, эпюры при `q` = 0, 50, 100 (только с `--smooth-sweep`; с `--no-plots` — только CSV) |
 | `group2_tradeoff.png`, `group2_tradeoff.csv` | `max|M|` и суммарный статический момент от доли группы 2 (только с `--group2-sweep`; с `--no-plots` — только CSV) |
 
 ### Из Python
@@ -598,73 +594,6 @@ $10^{-9}$ от максимального обнуляются как числе
 - Если все коэффициенты зафиксированы, оптимизация не запускается, `group2_percent`
   игнорируется: `s_group1 = s`, `s_group2 = 0`.
 
-## Сглаживание эпюры момента
-
-Минимальный `max|M|` обычно даёт «пилу»: эпюра много раз переходит от `+max` к `−max`.
-Параметр `q` (0…100) — степень сглаживания — уменьшает **размах** эпюры
-$R = \max M - \min M$ ценой наименьшего возможного роста `max|M|`:
-
-| `q` | Что получается |
-|---|---|
-| `0` (по умолчанию) | без сглаживания: минимальный `max|M|` — то, что считалось раньше |
-| `100` | минимально возможный размах эпюры (при заданных ограничениях и бюджете группы 2) |
-| `0 < q < 100` | размах уменьшается линейно по `q`; среди эпюр с таким размахом берётся эпюра с наименьшим `max|M|` |
-
-### Постановка
-
-Вводятся переменные $hi$, $lo$ с $lo \le M(z_k) \le hi$ во всех сечениях, так что
-$hi - lo$ — размах. Задача остаётся линейной:
-
-1. Решение без сглаживания (`q = 0`), его размах — $R_{hi}$.
-2. $R_{lo} = \min (hi - lo)$ при двух равенствах, `fixed`/`bounds` и бюджете
-   группы 2; `max|M|` не ограничивается.
-3. Для заданного `q`:
-
-$$R(q) = R_{hi} - \frac{q}{100}\,(R_{hi} - R_{lo}),$$
-
-   и решается $\min t$ при $-t \le M(z_k) \le t$ и $hi - lo \le R(q)$.
-
-Чем больше `q`, тем уже допустимое множество, поэтому `max|M|` при росте `q` не
-убывает, а размах убывает линейно. Каждое решение — наилучшее по `max|M|` для своего
-размаха, то есть сглаживание «покупается» минимальной жертвой по моменту. Сглаживание
-работает внутри бюджета группы 2: сначала выбирается `p`, затем `q`. Оси независимы.
-
-### Что даёт на примере
-
-`example_shaft.json`, ось Y:
-
-| `q` | max\|M\|, Н·м | размах, Н·м |
-|---|---|---|
-| 0 | 135.5 | 271.0 |
-| 30 | 155.8 | 250.6 |
-| 50 | 169.3 | 237.0 |
-| 100 | 203.2 | 203.2 |
-
-При `q = 100` эпюра становится односторонней (не меняет знак). В этом примере размах
-и `max|M|` меняются один к одному: каждый Н·м уменьшения размаха стоит Н·м роста
-пика. Ниже 203 Н·м размах не опускается: его задаёт сила шатунной шейки, которую
-противовесы на щеках не компенсируют. Для примера с ограничениями
-(`example_shaft_constrained.json`) размах почти не уменьшается (402.0 → 401.5 Н·м).
-
-### Как задать
-
-```bash
-crankbalance examples/example_shaft.json --smooth-percent 30
-crankbalance examples/example_shaft.json --smooth-sweep     # q = 0, 10, …, 100
-```
-
-В JSON — `"counterweights": {"smooth_percent": 30}`; из Python —
-`analyze(engine, components, smooth_percent=30)`. Явное значение перекрывает JSON.
-
-`--smooth-sweep` сохраняет `smooth_tradeoff.png` (`max|M|` и размах от `q`),
-`smooth_tradeoff.csv` и `smooth_moments.png` (эпюры при `q` = 0, 50, 100).
-
-В `result_x`/`result_y` добавлены ключи (всё в Н·мм): `smooth_percent`,
-`moment_range` (размах итоговой эпюры), `moment_range_max` ($R_{hi}$),
-`moment_range_min` ($R_{lo}$; `nan` при `q = 0`), `max_moment_unsmoothed` (`max|M|`
-без сглаживания). У `BalanceResult` — свойства `moment_range_x`, `moment_range_y` (Н·м).
-Если размах уже минимален, все `q` дают одно решение, и в выводе об этом сообщается.
-
 ## Система координат и единицы измерения
 
 - Ось `x` идёт вдоль оси вала; `y`, `z` лежат в плоскости поперечного сечения.
@@ -885,11 +814,10 @@ verify_kkt_conditions(res.result_y, axis="y")
 
 | Функция / класс | Назначение |
 |---|---|
-| `analyze(engine, components, step=0.01, constraints=None, counterweight_positions=None, group2_percent=100, norm="l1", smooth_percent=0)` | сквозной расчёт, возвращает `BalanceResult` |
-| `with_smooth_percent(res, q)`, `smooth_sweep(res, percents)` | пересчёт с другой степенью сглаживания; таблица компромисса |
+| `analyze(engine, components, step=0.01, constraints=None, counterweight_positions=None, group2_percent=100, norm="l1")` | сквозной расчёт, возвращает `BalanceResult` |
 | `with_group2_percent(res, p)`, `group2_sweep(res, percents)` | пересчёт с другой долей группы 2 без повторения шагов 1–3; таблица компромисса |
 | `CounterweightConstraints(fixed, bounds)` | ограничения на противовесы одной оси; `from_dict` понимает `zero`/`fixed`/`bounds` |
-| `load_constraints(path)`, `load_counterweight_positions(path)`, `load_group2_percent(path)`, `load_smooth_percent(path)` | читают блок `counterweights` из JSON |
+| `load_constraints(path)`, `load_counterweight_positions(path)`, `load_group2_percent(path)` | читают блок `counterweights` из JSON |
 | `load_shaft(path)` | читает JSON, возвращает `(EngineConfig, список ShaftComponent)` |
 | `EngineConfig` | угловая скорость, масса шатуна, ширины сечений по умолчанию, `main_journal_widths` |
 | `ShaftComponent(kind, x, y, z, mass, width=None)` | один элемент вала; `width` — своя толщина элемента |
@@ -901,7 +829,7 @@ verify_kkt_conditions(res.result_y, axis="y")
 | `total_distribution(z, L1, F1, L2, F2, F3, L3)` | момент по методу сечений, Н·мм |
 | `make_initial_coefficients(n, default, overrides)` | начальные `s` с возможностью фиксации |
 | `build_counterweight_lp(...)` | собирает матрицы ЛП |
-| `optimize_counterweights(..., group2_percent=100, norm="l1", budget_eps=1e-9, smooth_percent=0)` | подбор противовесов (HiGHS) с бюджетом статического момента и сглаживанием |
+| `optimize_counterweights(..., group2_percent=100, norm="l1", budget_eps=1e-9)` | подбор противовесов (HiGHS) с бюджетом статического момента |
 | `minimal_static_moment(...)`, `minimal_moment_budget(...)` | шаг 1 (`s`, $B_{\min}$) и шаги 2–3 (`s`, $B_{\max}$, $M_{opt}$) |
 | `static_moment(s, norm)` | `Σ|s|` или `max|s|` |
 | `optimize_counterweights_history(...)` | то же с историей итераций (simplex); принимает те же `s_init`, `s_fixed`, `s_bounds`, `L3` |
@@ -913,7 +841,6 @@ verify_kkt_conditions(res.result_y, axis="y")
 | `plotting.plot_moment_3d` | 3D-график $(M_x, M_y)$, статичный или интерактивный |
 | `plotting.plot_convergence`, `plotting.plot_sensitivity` | сходимость и чувствительность |
 | `plotting.plot_group2_tradeoff(rows, norm)` | `max|M|` и статический момент от доли группы 2 |
-| `plotting.plot_smooth_tradeoff(rows)`, `plotting.plot_smooth_moments(curves, L)` | `max|M|` и размах от степени сглаживания; эпюры при разных `q` |
 
 У каждой функции есть docstring с описанием параметров: `help(optimize_counterweights)`.
 

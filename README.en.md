@@ -48,7 +48,6 @@ crankpins (F2), purple — the counterweights found (F3).*
 - [Describing your own shaft](#describing-your-own-shaft)
 - [Counterweight constraints](#counterweight-constraints)
 - [Two groups of static moments](#two-groups-of-static-moments)
-- [Smoothing the moment diagram](#smoothing-the-moment-diagram)
 - [Coordinate system and units](#coordinate-system-and-units)
 - [Table of counterweight static moments](#table-of-counterweight-static-moments)
 - [Reading the results](#reading-the-results)
@@ -232,8 +231,6 @@ Command-line options:
 | `--group2-percent P` | share of group 2 of the static moments, 0…100 (default: the value from the JSON, otherwise 100); see [Two groups of static moments](#two-groups-of-static-moments) |
 | `--norm l1\|linf` | static-moment budget: the sum of `|s_i|` (default) or `max|s_i|` |
 | `--group2-sweep` | compute `p` = 0, 10, …, 100 and save `group2_tradeoff.png` and `group2_tradeoff.csv` |
-| `--smooth-percent Q` | degree of smoothing of the diagram, 0…100 (default: the value from the JSON, otherwise 0); see [Smoothing the moment diagram](#smoothing-the-moment-diagram) |
-| `--smooth-sweep` | compute `q` = 0, 10, …, 100 and save `smooth_tradeoff.png`, `smooth_tradeoff.csv`, `smooth_moments.png` |
 | `--no-plots` | calculation only, no plots or files (the table is still printed) |
 | `--sensitivity` | save sensitivity plots of `max|M|` to each coefficient `s_i` |
 | `--convergence` | save convergence plots of the simplex method (coarse 2 mm grid; requires a SciPy that still has `linprog(method='simplex')`; for the x axis bounds of ±5 are set, as in the original notebook) |
@@ -251,7 +248,6 @@ Files written to `--out`:
 | `moment_3d.html` | the same, interactive (only with `--interactive`) |
 | `sensitivity_x.png`, `sensitivity_y.png` | sensitivity to the coefficients (only with `--sensitivity`) |
 | `convergence_x.png`, `convergence_y.png` | progress of the simplex method (only with `--convergence`) |
-| `smooth_tradeoff.png`, `smooth_tradeoff.csv`, `smooth_moments.png` | `max|M|` and the diagram range versus the degree of smoothing, diagrams at `q` = 0, 50, 100 (only with `--smooth-sweep`; with `--no-plots`, the CSV only) |
 | `group2_tradeoff.png`, `group2_tradeoff.csv` | `max|M|` and the total static moment versus the share of group 2 (only with `--group2-sweep`; with `--no-plots`, the CSV only) |
 
 ### From Python
@@ -638,74 +634,6 @@ magnitudes); the CSV gets the components `s1_x_kg_m`, `s1_y_kg_m`, `s2_x_kg_m`,
 - If all coefficients are fixed, no optimization is run and `group2_percent` is ignored:
   `s_group1 = s`, `s_group2 = 0`.
 
-## Smoothing the moment diagram
-
-The minimal `max|M|` usually gives a "saw": the diagram swings from `+max` to `−max`
-many times. The parameter `q` (0…100), the degree of smoothing, reduces the **range**
-of the diagram $R = \max M - \min M$ at the cost of the smallest possible growth of
-`max|M|`:
-
-| `q` | Result |
-|---|---|
-| `0` (default) | no smoothing: the minimal `max|M|` — what was computed before |
-| `100` | the smallest possible range of the diagram (under the given constraints and group-2 budget) |
-| `0 < q < 100` | the range decreases linearly with `q`; among diagrams with that range the one with the smallest `max|M|` is taken |
-
-### Formulation
-
-Variables $hi$, $lo$ with $lo \le M(z_k) \le hi$ at all sections are added, so
-$hi - lo$ is the range. The problem stays linear:
-
-1. The solution without smoothing (`q = 0`); its range is $R_{hi}$.
-2. $R_{lo} = \min (hi - lo)$ subject to the two equalities, `fixed`/`bounds` and the
-   group-2 budget; `max|M|` is not constrained.
-3. For a given `q`:
-
-$$R(q) = R_{hi} - \frac{q}{100}\,(R_{hi} - R_{lo}),$$
-
-   and $\min t$ is solved subject to $-t \le M(z_k) \le t$ and $hi - lo \le R(q)$.
-
-A larger `q` gives a smaller feasible set, so `max|M|` does not decrease with `q`, while
-the range decreases linearly. Each solution is the best in `max|M|` for its range, i.e.
-smoothing is bought with the minimal sacrifice in moment. Smoothing works inside the
-group-2 budget: `p` is applied first, then `q`. The axes are independent.
-
-### What it gives on the example
-
-`example_shaft.json`, y axis:
-
-| `q` | max\|M\|, N·m | range, N·m |
-|---|---|---|
-| 0 | 135.5 | 271.0 |
-| 30 | 155.8 | 250.6 |
-| 50 | 169.3 | 237.0 |
-| 100 | 203.2 | 203.2 |
-
-At `q = 100` the diagram becomes one-sided (does not change sign). In this example the
-range and `max|M|` trade one to one: each N·m of range reduction costs one N·m of peak.
-The range cannot go below 203 N·m: it is set by the crankpin force, which counterweights
-on the crank webs cannot compensate. For the constrained example
-(`example_shaft_constrained.json`) the range barely decreases (402.0 → 401.5 N·m).
-
-### How to set it
-
-```bash
-crankbalance examples/example_shaft.json --smooth-percent 30
-crankbalance examples/example_shaft.json --smooth-sweep     # q = 0, 10, …, 100
-```
-
-In the JSON: `"counterweights": {"smooth_percent": 30}`; from Python:
-`analyze(engine, components, smooth_percent=30)`. An explicit value overrides the JSON.
-
-`--smooth-sweep` saves `smooth_tradeoff.png` (`max|M|` and range versus `q`),
-`smooth_tradeoff.csv` and `smooth_moments.png` (diagrams at `q` = 0, 50, 100).
-
-New keys in `result_x`/`result_y` (all in N·mm): `smooth_percent`, `moment_range`
-(range of the final diagram), `moment_range_max` ($R_{hi}$), `moment_range_min`
-($R_{lo}$; `nan` at `q = 0`), `max_moment_unsmoothed` (`max|M|` without smoothing).
-`BalanceResult` has the properties `moment_range_x`, `moment_range_y` (N·m). If the range
-is already minimal, all `q` give the same solution; this is reported in the output.
-
 ## Coordinate system and units
 
 - The `x` axis runs along the shaft axis; `y`, `z` lie in the plane of the cross section.
@@ -930,11 +858,10 @@ Everything below is importable directly from `crankshaft_balancing`, except the 
 
 | Function / class | Purpose |
 |---|---|
-| `analyze(engine, components, step=0.01, constraints=None, counterweight_positions=None, group2_percent=100, norm="l1", smooth_percent=0)` | end-to-end calculation, returns `BalanceResult` |
-| `with_smooth_percent(res, q)`, `smooth_sweep(res, percents)` | recalculation with another degree of smoothing; trade-off table |
+| `analyze(engine, components, step=0.01, constraints=None, counterweight_positions=None, group2_percent=100, norm="l1")` | end-to-end calculation, returns `BalanceResult` |
 | `with_group2_percent(res, p)`, `group2_sweep(res, percents)` | recalculation with another share of group 2 without repeating steps 1–3; trade-off table |
 | `CounterweightConstraints(fixed, bounds)` | counterweight constraints for one axis; `from_dict` understands `zero`/`fixed`/`bounds` |
-| `load_constraints(path)`, `load_counterweight_positions(path)`, `load_group2_percent(path)`, `load_smooth_percent(path)` | read the `counterweights` block from the JSON |
+| `load_constraints(path)`, `load_counterweight_positions(path)`, `load_group2_percent(path)` | read the `counterweights` block from the JSON |
 | `load_shaft(path)` | reads the JSON, returns `(EngineConfig, list of ShaftComponent)` |
 | `EngineConfig` | angular speed, connecting rod mass, default section widths, `main_journal_widths` |
 | `ShaftComponent(kind, x, y, z, mass, width=None)` | one shaft element (crank web or crankpin); `width` is its own thickness |
@@ -946,7 +873,7 @@ Everything below is importable directly from `crankshaft_balancing`, except the 
 | `total_distribution(z, L1, F1, L2, F2, F3, L3)` | bending moment by the method of sections, N·mm |
 | `make_initial_coefficients(n, default, overrides)` | initial `s` with the possibility of fixing |
 | `build_counterweight_lp(...)` | assembles the LP matrices |
-| `optimize_counterweights(..., group2_percent=100, norm="l1", budget_eps=1e-9, smooth_percent=0)` | counterweight selection (HiGHS) with a static-moment budget and smoothing |
+| `optimize_counterweights(..., group2_percent=100, norm="l1", budget_eps=1e-9)` | counterweight selection (HiGHS) with a static-moment budget |
 | `minimal_static_moment(...)`, `minimal_moment_budget(...)` | step 1 (`s`, $B_{\min}$) and steps 2–3 (`s`, $B_{\max}$, $M_{opt}$) |
 | `static_moment(s, norm)` | `Σ|s|` or `max|s|` |
 | `optimize_counterweights_history(...)` | the same with the iteration history (simplex); takes the same `s_init`, `s_fixed`, `s_bounds`, `L3` |
@@ -958,7 +885,6 @@ Everything below is importable directly from `crankshaft_balancing`, except the 
 | `plotting.plot_moment_3d` | 3D plot of $(M_x, M_y)$, static or interactive |
 | `plotting.plot_convergence`, `plotting.plot_sensitivity` | convergence and sensitivity |
 | `plotting.plot_group2_tradeoff(rows, norm)` | `max|M|` and the static moment versus the share of group 2 |
-| `plotting.plot_smooth_tradeoff(rows)`, `plotting.plot_smooth_moments(curves, L)` | `max|M|` and the range versus the degree of smoothing; diagrams at different `q` |
 
 Every function has a docstring (in Russian) describing its parameters: `help(optimize_counterweights)`.
 

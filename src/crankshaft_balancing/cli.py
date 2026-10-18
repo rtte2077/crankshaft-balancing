@@ -6,11 +6,10 @@ from pathlib import Path
 
 import numpy as np
 
-from .analysis import (analyze, group2_sweep, raw_moments, smooth_sweep,
-                       with_smooth_percent)
+from .analysis import analyze, group2_sweep, raw_moments
 from .constraints import resolve_constraints
 from .loader import (load_constraints, load_counterweight_positions,
-                     load_group2_percent, load_shaft, load_smooth_percent)
+                     load_group2_percent, load_shaft)
 from .optimization import optimize_counterweights_history
 from .report import (counterweight_rows, format_counterweight_table,
                      save_counterweight_csv)
@@ -27,7 +26,7 @@ def _percent(value: str) -> float:
         raise argparse.ArgumentTypeError(f"ожидается число 0..100, получено {value!r}")
     if not 0.0 <= p <= 100.0:
         raise argparse.ArgumentTypeError(
-            f"значение должно быть в диапазоне 0..100, получено {p:g}")
+            f"доля группы 2 должна быть в диапазоне 0..100, получено {p:g}")
     return p
 
 
@@ -55,13 +54,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--group2-sweep", action="store_true",
                    help="посчитать p = 0, 10, ..., 100 и сохранить в --out "
                         "group2_tradeoff.png и group2_tradeoff.csv")
-    p.add_argument("--smooth-percent", type=_percent, default=None, metavar="Q",
-                   help="степень сглаживания эпюры, 0..100: 0 — без сглаживания "
-                        "(минимальный max|M|), 100 — минимальный размах max M − min M "
-                        "(по умолчанию: counterweights.smooth_percent из JSON, иначе 0)")
-    p.add_argument("--smooth-sweep", action="store_true",
-                   help="посчитать q = 0, 10, ..., 100 и сохранить в --out "
-                        "smooth_tradeoff.png, smooth_tradeoff.csv и smooth_moments.png")
     p.add_argument("--no-plots", action="store_true", help="только расчёт, без графиков")
     p.add_argument("--verify", action="store_true",
                    help="проверить глобальность оптимума (двойственность + ККТ)")
@@ -129,38 +121,6 @@ def _group2_sweep(res, out: Path, norm: str, plots: bool = True) -> None:
     print(f"Компромисс группы 2 сохранён: {(out / 'group2_tradeoff.csv').resolve()}")
 
 
-def _smooth_sweep(res, out: Path, plots: bool = True) -> None:
-    """q = 0, 10, ..., 100: smooth_tradeoff.csv/.png и эпюры smooth_moments.png."""
-    rows = smooth_sweep(res)
-    out.mkdir(parents=True, exist_ok=True)
-    keys = ["smooth_percent", "max_moment_x", "max_moment_y",
-            "moment_range_x", "moment_range_y"]
-    header = ["smooth_percent", "max_abs_Mx_N_m", "max_abs_My_N_m",
-              "range_Mx_N_m", "range_My_N_m"]
-    with open(out / "smooth_tradeoff.csv", "w", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(header)
-        for r in rows:
-            writer.writerow([f"{r[k]:.9g}" for k in keys])
-    print("\nСглаживание, %   max|Mx|, Н·м   max|My|, Н·м   размах Mx, Н·м   размах My, Н·м")
-    for r in rows:
-        print(f"{r['smooth_percent']:>15g} {r['max_moment_x']:>14.4f} "
-              f"{r['max_moment_y']:>14.4f} {r['moment_range_x']:>16.4f} "
-              f"{r['moment_range_y']:>16.4f}")
-    if plots:
-        import matplotlib
-        matplotlib.use("Agg")
-        from .plotting import plot_smooth_moments, plot_smooth_tradeoff
-        plot_smooth_tradeoff(rows, save_path=out / "smooth_tradeoff.png", show=False)
-        curves = []
-        for q in (0, 50, 100):
-            r = with_smooth_percent(res, q)
-            curves.append((q, r.Z, r.result_x["M"], r.result_y["M"]))
-        plot_smooth_moments(curves, res.engine.crankshaft_length,
-                            save_path=out / "smooth_moments.png", show=False)
-    print(f"Компромисс сглаживания сохранён: {(out / 'smooth_tradeoff.csv').resolve()}")
-
-
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     engine, components = load_shaft(args.config)
@@ -168,21 +128,15 @@ def main(argv=None) -> int:
     group2_percent = args.group2_percent
     if group2_percent is None:
         group2_percent = load_group2_percent(args.config)
-    smooth_percent = args.smooth_percent
-    if smooth_percent is None:
-        smooth_percent = load_smooth_percent(args.config)
     res = analyze(engine, components, step=args.step, constraints=constraints,
                   counterweight_positions=load_counterweight_positions(args.config),
                   group2_percent=100.0 if group2_percent is None else group2_percent,
-                  norm=args.norm,
-                  smooth_percent=0.0 if smooth_percent is None else smooth_percent)
+                  norm=args.norm)
 
     print(f"\nmax|Mx| = {res.max_moment_x:.4f} Н·м, max|My| = {res.max_moment_y:.4f} Н·м")
     print(f"Группа 2: {res.group2_percent:g} %; суммарный статический момент "
           f"({args.norm}): x = {res.result_x['static_moment_sum']:.6f}, "
           f"y = {res.result_y['static_moment_sum']:.6f} кг·м")
-    print(f"Сглаживание: {res.smooth_percent:g} %; размах эпюры max M − min M: "
-          f"x = {res.moment_range_x:.4f}, y = {res.moment_range_y:.4f} Н·м")
 
     rows = counterweight_rows(res)
     print("\n" + format_counterweight_table(rows, lang=args.table_lang))
@@ -203,8 +157,6 @@ def main(argv=None) -> int:
     out = Path(args.out)
     if args.group2_sweep:
         _group2_sweep(res, out, args.norm, plots=not args.no_plots)
-    if args.smooth_sweep:
-        _smooth_sweep(res, out, plots=not args.no_plots)
 
     if args.no_plots:
         return 0
