@@ -345,22 +345,28 @@ def plot_smooth_tradeoff(rows: Sequence[dict], save_path: Optional[str] = None,
 
 
 def plot_smooth_moments(curves: Sequence[tuple], shaft_length: float,
-                        save_path: Optional[str] = None, show: bool = True):
+                        save_path: Optional[str] = None, show: bool = True,
+                        axes: Sequence[str] = ("y", "x"), title: Optional[str] = None,
+                        xlabel: Optional[str] = None, ylabel: str = "M (ось {axis}), Н·м"):
     """Эпюры момента при разной степени сглаживания на одном графике по осям.
 
     ``curves`` — список ``(q, z, M_x, M_y)``: ``z`` от правого конца вала (как ``Z``),
-    ``M_x``, ``M_y`` в Н·мм.
+    ``M_x``, ``M_y`` в Н·мм. ``axes`` — какие оси рисовать (``"y"``, ``"x"``);
+    ``title``, ``xlabel``, ``ylabel`` (с ``{axis}``) — подписи, например на английском.
     """
-    fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
-    for ax, idx, name in ((axes[0], 3, "Y"), (axes[1], 2, "X")):
+    fig, ax_list = plt.subplots(len(axes), 1, figsize=(10, 3.6 * len(axes) + 0.6),
+                                sharex=True, squeeze=False)
+    ax_list = ax_list[:, 0]
+    for ax, name in zip(ax_list, axes):
+        idx = 3 if name == "y" else 2
         for item in curves:
             ax.plot(shaft_length - np.asarray(item[1]), np.asarray(item[idx]) * NMM_TO_NM,
-                    label=f"q = {item[0]:g} %")
+                    label=f"q = {item[0]:g} %", lw=1.8)
         ax.axhline(0, color="black", lw=0.6)
-        ax.set_ylabel(f"M (ось {name}), Н·м")
+        ax.set_ylabel(ylabel.format(axis=name.upper()))
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=9)
-    axes[-1].set_xlabel("Координата вдоль вала, мм (0 — левый конец)")
-    fig.suptitle("Эпюры момента при разной степени сглаживания")
+    ax_list[-1].set_xlabel(xlabel or "Координата вдоль вала, мм (0 — левый конец)")
+    fig.suptitle(title or "Эпюры момента при разной степени сглаживания")
     fig.tight_layout()
     return _finish(fig, save_path, show)
